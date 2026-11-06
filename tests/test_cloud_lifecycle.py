@@ -156,6 +156,7 @@ class CloudLifecycleTests(unittest.IsolatedAsyncioTestCase):
         sdk_proxy.new_url.assert_awaited_once_with()
         acquire.assert_awaited_once()
         self.assertEqual(acquire.await_args.kwargs['proxy_config'].username, 'groups-UNBLOCKER')
+        self.assertEqual(acquire.await_args.kwargs['proxy_mode'], 'unblocker')
         self.assertEqual(len(self.actor.records), 1)
         self.assertEqual(len(self.actor.records[0]), 11)
         state = self.actor.values['RUN_STATE']

@@ -185,7 +185,8 @@ async def run(input_path=None):
                 if proxy_config is None:
                     document, responses, acquisition = await acquire(data)
                 else:
-                    document, responses, acquisition = await acquire(data, proxy_config=proxy_config)
+                    document, responses, acquisition = await acquire(
+                        data, proxy_config=proxy_config, proxy_mode=proxy_settings.mode)
                 state['acquisition'] = acquisition
                 if proxy_config is not None:
                     state['proxy'].update(proxy_observation(acquisition))

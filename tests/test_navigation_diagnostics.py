@@ -142,11 +142,12 @@ class AcquisitionDiagnosticTests(unittest.IsolatedAsyncioTestCase):
         # Exercise the real context-builder against an AsyncMock, never Chromium.
         for group in (None, 'RESIDENTIAL', 'UNBLOCKER'):
             proxy = ProxyConfig.from_string(f'http://groups-{group}:PRIVATE_PASSWORD@proxy.invalid:8000') if group else None
-            manager = NativeBrowserManager(BrowserConfig(headless=True, ignore_https_errors=False), logger=private_proxy_logger())
+            ignore_https_errors = group == 'UNBLOCKER'
+            manager = NativeBrowserManager(BrowserConfig(headless=True, ignore_https_errors=ignore_https_errors), logger=private_proxy_logger())
             manager.browser = SimpleNamespace(new_context=AsyncMock(return_value=SimpleNamespace(route=AsyncMock())))
             await manager.create_browser_context(CrawlerRunConfig(proxy_config=proxy, max_retries=0))
             kwargs = manager.browser.new_context.await_args.kwargs
-            self.assertFalse(kwargs['ignore_https_errors'])
+            self.assertEqual(kwargs['ignore_https_errors'], ignore_https_errors)
             if proxy:
                 self.assertEqual(kwargs['proxy'], {'server': proxy.server, 'username': proxy.username, 'password': proxy.password})
             else:

@@ -52,10 +52,11 @@ class NativeBrowserManager(BrowserManager):
         return options
 
 
-def make_crawler(*, proxy_enabled=False):
+def make_crawler(*, proxy_enabled=False, ignore_https_errors=False):
     config = BrowserConfig(headless=os.name != 'nt', browser_type='chromium',
-        chrome_channel='chrome' if os.name == 'nt' else 'chromium', ignore_https_errors=False,
+        chrome_channel='chrome' if os.name == 'nt' else 'chromium', ignore_https_errors=ignore_https_errors,
         enable_stealth=False, use_persistent_context=False, verbose=False)
+    event('TLS', 'VerificaciÃ³n de certificados HTTPS=%s', 'desactivada' if ignore_https_errors else 'activada')
     # Constructor defaults advertise a different OS/version. Retain native identity instead.
     config.user_agent = None
     config.browser_hint = None
@@ -83,7 +84,7 @@ def memory_mb():
     return round(private / 1048576, 1), round(rss / 1048576, 1)
 
 
-async def acquire(data, *, proxy_config=None):
+async def acquire(data, *, proxy_config=None, proxy_mode=None):
     started = time.perf_counter()
     report = {'status': 'running', 'url': safe_url(data['url']), 'navigationCount': 0,
         'directApiRequests': 0, 'requests': [], 'peakPrivateMb': 0, 'peakRssMb': 0,
@@ -92,7 +93,10 @@ async def acquire(data, *, proxy_config=None):
     responses, tasks = {}, set()
     denied_optional = set()
     stop = asyncio.Event()
-    crawler = make_crawler(proxy_enabled=True) if proxy_config is not None else make_crawler()
+    if proxy_config is not None:
+        crawler = make_crawler(proxy_enabled=True, ignore_https_errors=proxy_mode == 'unblocker')
+    else:
+        crawler = make_crawler()
     origin = urlsplit(data['url']).hostname
     endpoint = '/product-page/products/' + data['productId']
     paths = {endpoint: 'product', endpoint + '/pickers': 'pickers',

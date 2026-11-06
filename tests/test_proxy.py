@@ -210,14 +210,24 @@ class ProxyTests(unittest.IsolatedAsyncioTestCase):
                     error_message=message, html='')))
             with patch('src.browser.make_crawler', return_value=crawler) as factory, \
                     patch('src.browser.memory_mb', return_value=(10, 20)), patch('src.browser.event') as log:
-                _, _, report = await acquire(data, proxy_config=proxy)
-            factory.assert_called_once_with(proxy_enabled=True)
+                _, _, report = await acquire(data, proxy_config=proxy, proxy_mode='datacenter')
+            factory.assert_called_once_with(proxy_enabled=True, ignore_https_errors=False)
             crawler.arun.assert_awaited_once()
             self.assertIs(crawler.arun.await_args.kwargs['config'].proxy_config, proxy)
             self.assertEqual(report['error']['code'], expected)
             self.assertTrue(report['browserClosed'])
             for secret in ('synthetic-password', 'synthetic-token', 'synthetic-cookie'):
                 self.assertNotIn(secret, json.dumps(report) + str(log.call_args_list))
+
+    def test_browser_tls_policy_is_false_by_default_and_true_only_when_requested(self):
+        from src.browser import make_crawler
+        with patch('src.browser.event'):
+            direct = make_crawler()
+            residential = make_crawler(proxy_enabled=True, ignore_https_errors=False)
+            unblocker = make_crawler(proxy_enabled=True, ignore_https_errors=True)
+        self.assertFalse(direct.browser_config.ignore_https_errors)
+        self.assertFalse(residential.browser_config.ignore_https_errors)
+        self.assertTrue(unblocker.browser_config.ignore_https_errors)
 
 
 if __name__ == '__main__':
