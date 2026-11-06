@@ -1,0 +1,10 @@
+# Same runtime allow-list as Docker. No local inputs, runs, browser profiles or credentials.
+**
+!Dockerfile
+!requirements.txt
+!pyproject.toml
+!README.md
+!src/
+!src/*.py
+!.actor/
+!.actor/*.json

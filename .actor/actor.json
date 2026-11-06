@@ -1,0 +1,19 @@
+{
+    "$schema":  "https://apify.com/schemas/v1/actor.ide.json",
+    "actorSpecification":  1,
+    "name":  "backmarket-scraper",
+    "title":  "Back Market — TU CUMPA",
+    "description":  "Crawl4AI sin LLM: HTML y JSON comercial a contrato 1688, con estados y procedencia explícitos.",
+    "version":  "0.1",
+    "meta":  {
+                 "generatedBy":  "Codex with GPT-6.1 Sol"
+             },
+    "input":  "./input_schema.json",
+    "output":  "./output_schema.json",
+    "storages":  {
+                     "dataset":  "./dataset_schema.json",
+                     "keyValueStore":  "./key_value_store_schema.json"
+                 },
+    "dockerfile":  "../Dockerfile",
+    "readme":  "../README.md"
+}

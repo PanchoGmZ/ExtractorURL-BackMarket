@@ -1,0 +1,6 @@
+{
+  "files.exclude": {
+    "storage/key_value_stores/**/*.__metadata__.json": true,
+    "storage/key_value_stores/**/__metadata__.json": true
+  }
+}

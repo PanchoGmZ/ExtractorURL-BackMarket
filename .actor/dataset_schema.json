@@ -1,0 +1,231 @@
+{
+    "actorSpecification":  1,
+    "fields":  {
+                   "type":  "object",
+                   "properties":  {
+                                      "url":  {
+                                                  "type":  "string",
+                                                  "format":  "uri"
+                                              },
+                                      "title":  {
+                                                    "type":  [
+                                                                 "string",
+                                                                 "null"
+                                                             ]
+                                                },
+                                      "price":  {
+                                                    "type":  [
+                                                                 "string",
+                                                                 "null"
+                                                             ],
+                                                    "pattern":  "^(?:0|[1-9]\\d*)(?:\\.\\d+)?$"
+                                                },
+                                      "productLadderPrices":  {
+                                                                  "type":  "array",
+                                                                  "maxItems":  0
+                                                              },
+                                      "moq":  {
+                                                  "type":  "null"
+                                              },
+                                      "weight":  {
+                                                     "type":  [
+                                                                  "object",
+                                                                  "null"
+                                                              ],
+                                                     "description":  "Peso físico del producto normalizado a kg; no es peso de envío.",
+                                                     "properties":  {
+                                                                        "value":  {
+                                                                                      "type":  "number",
+                                                                                      "exclusiveMinimum":  0
+                                                                                  },
+                                                                        "unit":  {
+                                                                                     "type":  "string",
+                                                                                     "enum":  [
+                                                                                                  "kg"
+                                                                                              ]
+                                                                                 }
+                                                                    },
+                                                     "required":  [
+                                                                      "value",
+                                                                      "unit"
+                                                                  ],
+                                                     "additionalProperties":  false
+                                                 },
+                                      "dimensions":  {
+                                                         "type":  "null"
+                                                     },
+                                      "images":  {
+                                                     "type":  [
+                                                                  "array",
+                                                                  "null"
+                                                              ],
+                                                     "items":  {
+                                                                   "type":  "string",
+                                                                   "format":  "uri"
+                                                               },
+                                                     "uniqueItems":  true
+                                                 },
+                                      "characteristics":  {
+                                                              "type":  [
+                                                                           "array",
+                                                                           "null"
+                                                                       ],
+                                                              "items":  {
+                                                                            "type":  "object",
+                                                                            "properties":  {
+                                                                                               "attrName":  {
+                                                                                                                "type":  [
+                                                                                                                             "string",
+                                                                                                                             "null"
+                                                                                                                         ]
+                                                                                                            },
+                                                                                               "attrValue":  {
+                                                                                                                 "type":  [
+                                                                                                                              "string",
+                                                                                                                              "null"
+                                                                                                                          ]
+                                                                                                             }
+                                                                                           },
+                                                                            "required":  [
+                                                                                             "attrName",
+                                                                                             "attrValue"
+                                                                                         ],
+                                                                            "additionalProperties":  false
+                                                                        }
+                                                          },
+                                      "variations":  {
+                                                         "type":  [
+                                                                      "array",
+                                                                      "null"
+                                                                  ],
+                                                         "items":  {
+                                                                       "type":  "object",
+                                                                       "properties":  {
+                                                                                          "name":  {
+                                                                                                       "type":  "string"
+                                                                                                   },
+                                                                                          "variants":  {
+                                                                                                           "type":  "array",
+                                                                                                           "items":  {
+                                                                                                                         "type":  "object",
+                                                                                                                         "properties":  {
+                                                                                                                                            "name":  {
+                                                                                                                                                         "type":  [
+                                                                                                                                                                      "string",
+                                                                                                                                                                      "null"
+                                                                                                                                                                  ]
+                                                                                                                                                     },
+                                                                                                                                            "price":  {
+                                                                                                                                                          "type":  [
+                                                                                                                                                                       "string",
+                                                                                                                                                                       "null"
+                                                                                                                                                                   ],
+                                                                                                                                                          "pattern":  "^(?:0|[1-9]\\d*)(?:\\.\\d+)?$"
+                                                                                                                                                      },
+                                                                                                                                            "image":  {
+                                                                                                                                                          "type":  [
+                                                                                                                                                                       "string",
+                                                                                                                                                                       "null"
+                                                                                                                                                                   ]
+                                                                                                                                                      }
+                                                                                                                                        },
+                                                                                                                         "required":  [
+                                                                                                                                          "name",
+                                                                                                                                          "price",
+                                                                                                                                          "image"
+                                                                                                                                      ],
+                                                                                                                         "additionalProperties":  false
+                                                                                                                     }
+                                                                                                       }
+                                                                                      },
+                                                                       "required":  [
+                                                                                        "name",
+                                                                                        "variants"
+                                                                                    ],
+                                                                       "additionalProperties":  false
+                                                                   }
+                                                     },
+                                      "productId":  {
+                                                        "type":  "string",
+                                                        "pattern":  "^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$"
+                                                    }
+                                  },
+                   "required":  [
+                                    "url",
+                                    "title",
+                                    "price",
+                                    "productLadderPrices",
+                                    "moq",
+                                    "weight",
+                                    "dimensions",
+                                    "images",
+                                    "characteristics",
+                                    "variations",
+                                    "productId"
+                                ],
+                   "additionalProperties":  false
+               },
+    "views":  {
+                  "overview":  {
+                                   "title":  "Productos 1688",
+                                   "transformation":  {
+                                                          "fields":  [
+                                                                         "url",
+                                                                         "title",
+                                                                         "price",
+                                                                         "productLadderPrices",
+                                                                         "moq",
+                                                                         "weight",
+                                                                         "dimensions",
+                                                                         "images",
+                                                                         "characteristics",
+                                                                         "variations",
+                                                                         "productId"
+                                                                     ]
+                                                      },
+                                   "display":  {
+                                                   "component":  "table",
+                                                   "properties":  {
+                                                                      "title":  {
+                                                                                    "label":  "Producto",
+                                                                                    "format":  "text"
+                                                                                },
+                                                                      "price":  {
+                                                                                    "label":  "Precio seleccionado",
+                                                                                    "format":  "text"
+                                                                                },
+                                                                      "url":  {
+                                                                                  "label":  "URL",
+                                                                                  "format":  "link"
+                                                                              },
+                                                                      "images":  {
+                                                                                     "label":  "Catálogo",
+                                                                                     "format":  "image"
+                                                                                 },
+                                                                      "productId":  {
+                                                                                        "label":  "UUID",
+                                                                                        "format":  "text"
+                                                                                    },
+                                                                      "weight":  {
+                                                                                     "label":  "Peso físico (kg)"
+                                                                                 },
+                                                                      "characteristics":  {
+                                                                                              "label":  "Características"
+                                                                                          },
+                                                                      "variations":  {
+                                                                                         "label":  "Variantes"
+                                                                                     },
+                                                                      "productLadderPrices":  {
+                                                                                                  "label":  "Precios por volumen"
+                                                                                              },
+                                                                      "moq":  {
+                                                                                  "label":  "MOQ"
+                                                                              },
+                                                                      "dimensions":  {
+                                                                                         "label":  "Dimensiones"
+                                                                                     }
+                                                                  }
+                                               }
+                               }
+              }
+}

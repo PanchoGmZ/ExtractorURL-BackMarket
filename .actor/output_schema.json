@@ -1,0 +1,21 @@
+{
+  "actorOutputSchemaVersion": 1,
+  "title": "Resultado y diagnóstico",
+  "properties": {
+    "products": {
+      "type": "string",
+      "title": "Producto extraído — JSON 1688",
+      "template": "{{links.apiDefaultDatasetUrl}}/items"
+    },
+    "state": {
+      "type": "string",
+      "title": "Estado y acceso real",
+      "template": "{{links.apiDefaultKeyValueStoreUrl}}/records/RUN_STATE"
+    },
+    "metadata": {
+      "type": "string",
+      "title": "Moneda e identificadores de las opciones",
+      "template": "{{links.apiDefaultKeyValueStoreUrl}}/records/PRODUCT_METADATA"
+    }
+  }
+}

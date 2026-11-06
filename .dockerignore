@@ -1,0 +1,10 @@
+# Strict runtime build context: local state, secrets and research never enter the image.
+**
+!Dockerfile
+!requirements.txt
+!pyproject.toml
+!README.md
+!src/
+!src/*.py
+!.actor/
+!.actor/*.json

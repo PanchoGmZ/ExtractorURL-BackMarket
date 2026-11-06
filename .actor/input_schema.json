@@ -1,0 +1,27 @@
+{
+  "title": "Back Market — Extraer producto",
+  "type": "object",
+  "schemaVersion": 1,
+  "required": [
+    "url"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "url": {
+      "title": "URL del producto",
+      "type": "string",
+      "description": "Ficha HTTPS www.backmarket.com/en-us/p/slug/UUID. Se admiten l y offerType opcionales, sin duplicados ni fragmento; otros parámetros se rechazan explícitamente.",
+      "editor": "textfield",
+      "prefill": ""
+    },
+    "outputFormat": {
+      "title": "Formato de salida",
+      "type": "string",
+      "description": "Un único producto agregado con el contrato reference1688 de once campos.",
+      "enum": [
+        "reference1688"
+      ],
+      "default": "reference1688"
+    }
+  }
+}

@@ -1,0 +1,640 @@
+{
+  "actorKeyValueStoreSchemaVersion": 1,
+  "title": "Estado y metadatos comerciales",
+  "collections": {
+    "runState": {
+      "key": "RUN_STATE",
+      "title": "Estado de ejecución",
+      "contentTypes": [
+        "application/json"
+      ],
+      "jsonSchema": {
+        "type": "object",
+        "properties": {
+          "source": {
+            "type": "string",
+            "enum": [
+              "backmarket"
+            ]
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "running",
+              "success",
+              "partial",
+              "blocked",
+              "error",
+              "aborted"
+            ]
+          },
+          "startedAt": {
+            "type": "string"
+          },
+          "finishedAt": {
+            "type": "string"
+          },
+          "executionMode": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "enum": [
+              "live",
+              "offline",
+              null
+            ]
+          },
+          "extractionPerformed": {
+            "type": "boolean"
+          },
+          "savedResults": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 1
+          },
+          "url": {
+            "type": "string"
+          },
+          "productId": {
+            "type": "string"
+          },
+          "acquisition": {
+            "type": "object",
+            "description": "Estados HTTP, Content-Type, errores y consumo observados durante una sola navegación."
+          },
+          "error": {
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "missingFields": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "counts": {
+            "type": "object"
+          },
+          "price": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "currency": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "priceSource": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "stage": {
+            "type": "string"
+          },
+          "elapsedSeconds": {
+            "type": "number",
+            "minimum": 0
+          },
+          "logicalExitCode": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "outputFile": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "runId": {
+            "type": "string"
+          },
+          "previousOutputFile": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "source",
+          "status",
+          "executionMode",
+          "extractionPerformed",
+          "savedResults"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "metadata": {
+      "key": "PRODUCT_METADATA",
+      "title": "Moneda, procedencia e identificadores de opciones",
+      "contentTypes": [
+        "application/json"
+      ],
+      "jsonSchema": {
+        "type": "object",
+        "properties": {
+          "productId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "url": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "currency": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "priceSource": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "offerId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "sku": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "isOutOfStock": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "variantGroups": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "groupIndex": {
+                  "type": "integer"
+                },
+                "id": {
+                  "type": "string"
+                },
+                "options": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "variantIndex": {
+                        "type": "integer"
+                      },
+                      "productId": {
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "available": {
+                        "type": [
+                          "boolean",
+                          "null"
+                        ]
+                      },
+                      "selected": {
+                        "type": [
+                          "boolean",
+                          "null"
+                        ]
+                      },
+                      "slug": {
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "parameters": {
+                        "type": [
+                          "object",
+                          "null"
+                        ]
+                      },
+                      "currency": {
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      }
+                    },
+                    "additionalProperties": false
+                  }
+                }
+              },
+              "additionalProperties": false
+            }
+          },
+          "weightVerification": {
+            "type": "string"
+          },
+          "htmlInventory": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          },
+          "htmlSha256": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "running",
+              "success",
+              "partial",
+              "blocked",
+              "error",
+              "aborted"
+            ]
+          },
+          "executionMode": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "enum": [
+              "live",
+              "offline",
+              null
+            ]
+          },
+          "extractionPerformed": {
+            "type": "boolean"
+          },
+          "sourceDiagnostics": {
+            "type": "object",
+            "description": "Presencia y procedencia de campos comerciales; no contiene cuerpos completos ni credenciales.",
+            "properties": {
+              "nuxtScripts": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "jsonLdScripts": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "embeddedJsonScripts": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "scriptErrors": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "jsonLdProductFound": {
+                "type": "boolean"
+              },
+              "jsonLdOfferPriceFound": {
+                "type": "boolean"
+              },
+              "commercialSources": {
+                "type": "object",
+                "properties": {
+                  "product": {
+                    "type": "string",
+                    "enum": [
+                      "nuxt",
+                      "embedded-json",
+                      "page-generated-json",
+                      "local-commercial-capture"
+                    ]
+                  },
+                  "pickers": {
+                    "type": "string",
+                    "enum": [
+                      "nuxt",
+                      "embedded-json",
+                      "page-generated-json",
+                      "local-commercial-capture"
+                    ]
+                  },
+                  "specifications": {
+                    "type": "string",
+                    "enum": [
+                      "nuxt",
+                      "embedded-json",
+                      "page-generated-json",
+                      "local-commercial-capture"
+                    ]
+                  }
+                },
+                "additionalProperties": false
+              },
+              "selectedOfferPriceFound": {
+                "type": "boolean"
+              },
+              "selectedOfferCurrencyFound": {
+                "type": "boolean"
+              },
+              "originalPricePresent": {
+                "type": "boolean"
+              },
+              "originalPriceUsed": {
+                "type": "boolean",
+                "enum": [
+                  false
+                ]
+              },
+              "foundFields": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "missingFields": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            },
+            "required": [
+              "nuxtScripts",
+              "jsonLdScripts",
+              "embeddedJsonScripts",
+              "scriptErrors",
+              "jsonLdProductFound",
+              "jsonLdOfferPriceFound",
+              "commercialSources",
+              "selectedOfferPriceFound",
+              "selectedOfferCurrencyFound",
+              "originalPricePresent",
+              "originalPriceUsed",
+              "foundFields",
+              "missingFields"
+            ],
+            "additionalProperties": false
+          },
+          "priceVerification": {
+            "type": "object",
+            "properties": {
+              "status": {
+                "type": "string",
+                "enum": [
+                  "verified",
+                  "unverified"
+                ]
+              },
+              "reason": {
+                "type": "string"
+              },
+              "selectedOptionChecks": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "requestedProductId": {
+                "type": "string"
+              },
+              "selectedOfferProductId": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "reportedAmount": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "reportedCurrency": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "status",
+              "reason",
+              "selectedOptionChecks",
+              "requestedProductId",
+              "selectedOfferProductId",
+              "reportedAmount",
+              "reportedCurrency"
+            ],
+            "additionalProperties": false
+          },
+          "weightNormalization": {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "physical_product"
+                ]
+              },
+              "shippingWeightKg": {
+                "type": "null"
+              },
+              "brand": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "model": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "productType": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "candidates": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "raw": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "unit": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "candidateKg": {
+                      "type": [
+                        "number",
+                        "null"
+                      ]
+                    },
+                    "status": {
+                      "type": "string",
+                      "enum": [
+                        "unverified",
+                        "suspicious",
+                        "normalized"
+                      ]
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "field": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "raw",
+                    "unit",
+                    "candidateKg",
+                    "status",
+                    "reason",
+                    "field"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "excludedShippingValues": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "status": {
+                "type": "string",
+                "enum": [
+                  "unverified",
+                  "official",
+                  "published_normalized"
+                ]
+              },
+              "reason": {
+                "type": "string"
+              },
+              "source": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "sourceUrl": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "verifiedOn": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "sourceValue": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "valueKg": {
+                "type": [
+                  "number",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "kind",
+              "shippingWeightKg",
+              "brand",
+              "model",
+              "productType",
+              "candidates",
+              "excludedShippingValues",
+              "status",
+              "reason",
+              "source",
+              "sourceUrl",
+              "verifiedOn",
+              "sourceValue",
+              "valueKg"
+            ],
+            "additionalProperties": false
+          },
+          "pageSelection": {
+            "type": "object",
+            "properties": {
+              "requested": {
+                "type": "object",
+                "properties": {
+                  "l": {
+                    "type": "string"
+                  },
+                  "offerType": {
+                    "type": "string"
+                  }
+                },
+                "additionalProperties": false
+              },
+              "final": {
+                "type": "object",
+                "properties": {
+                  "l": {
+                    "type": "string"
+                  },
+                  "offerType": {
+                    "type": "string"
+                  }
+                },
+                "additionalProperties": false
+              },
+              "status": {
+                "type": "string",
+                "enum": [
+                  "preserved",
+                  "not_requested",
+                  "changed_or_removed"
+                ]
+              }
+            },
+            "required": [
+              "requested",
+              "final",
+              "status"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "productId",
+          "status",
+          "currency",
+          "variantGroups"
+        ],
+        "additionalProperties": false
+      }
+    }
+  }
+}
