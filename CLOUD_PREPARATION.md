@@ -2,6 +2,20 @@
 
 Fecha: 6 de noviembre de 2026.
 
+## Diagnóstico local pendiente de publicación: fallo inmediato sin HTTP
+
+Evidencia comunicada por el usuario: Unblocker configurado, Chromium Linux iniciado, `arun()` devuelve `success=False`, `status_code=None` y cero respuestas observadas tras unos 44 ms. No se dispone del error normalizado de esa ejecución ni se ha reproducido una navegación. No se atribuye el fallo a TLS, permisos, túnel o incompatibilidad sin evidencia.
+
+Defecto de diagnóstico confirmado: `src/browser.py` solo consultaba `result.error_message` para reconocer dos clases de proxy; descartaba lo demás al generar `NAVIGATION_ERROR`. `private_proxy_logger()` también descartaba la copia que Crawl4AI registra por `error_status()`. El código instalado de Crawl4AI encapsula excepciones en un resultado sin HTTP, incluyendo texto y contexto de código, por lo que el valor `None` no acredita por sí mismo una respuesta denegada del proveedor.
+
+Cambios locales: `navigation_failure()` en `src/diagnostics.py` convierte los errores en códigos, categorías, operaciones y señales permitidas; no devuelve fragmentos del mensaje. Descarta URLs, asignaciones de credenciales y contexto de código, y nunca conserva rutas o valores desconocidos. El logger público guarda como máximo cuatro proyecciones seguras en memoria. `src/browser.py` publica `[CRAWL_RESULT]`, `[CAUSA_NAVEGACION]` y `RUN_STATE.acquisition.navigationError`, separando el mensaje del resultado de la evidencia recuperada del logger. La etapa previa a `arun()` es `crawl-call`; se registra su duración y si se alcanzó `before_goto`. No se modifican transporte, TLS, sesiones, parser, precio, peso o contrato 1688.
+
+Códigos nuevos: `PROXY_TUNNEL_ERROR`, `PLAYWRIGHT_PROXY_UNSUPPORTED`, `PLAYWRIGHT_API_ERROR`, `PLAYWRIGHT_ERROR`, `CRAWL4AI_ERROR`, `BROWSER_CLOSED`, `NETWORK_ERROR`, `NAVIGATION_ERROR_NO_DETAILS` y `NAVIGATION_ERROR_UNCLASSIFIED`. Se reutilizan autenticación/configuración de proxy, TLS, timeout y navegador ausente. Los códigos Playwright describen la señal concreta de la API, no una incompatibilidad global; `CRAWL4AI_ERROR` identifica una excepción encapsulada, no demuestra un defecto de esa biblioteca. HTTP 403 real y desafíos mantienen sus paradas.
+
+Pruebas focalizadas offline: nueve casos nuevos (con tablas de errores/resultados simulados) y seis regresiones seleccionadas de proxy/directo/Residential/Unblocker, aprobados. Se verifican errores con HTTP `None`, fallo temprano, ausencia de detalle, privacidad, buffer del logger, no reintentos, cierre y mapeo real de `ProxyConfig`/`CrawlerRunConfig` a un `Browser.new_context` simulado. No se arrancó navegador, no se consultó Back Market ni servicios de proxy y no se usaron créditos Apify.
+
+La causa remota sigue indeterminada. Por la condición del usuario, estos cambios no se publican: no se hace commit/push ni despliegue. Falta obtener en una ejecución autorizada la proyección segura `navigationError` (código, operación, señales, tipo, fuente, presencia de error), la etapa, `crawlCallSeconds`, contador `before_goto`, versiones y commit del build. No compartir mensajes brutos, URLs con autenticación, cookies ni tokens. La próxima corrección de transporte debe apoyarse en esa evidencia; no se propone desactivar certificados, cambiar la identidad ni rotar IPs.
+
 ## Actualización: Unblocker opcional
 
 Se conserva la integración oficial ya publicada en `fc34608101a527ad7324c0b5127a1cfa8daa4c8d`. `ProxySettings.mode` distingue transporte directo, datacenter, residencial y Unblocker. `split_proxy_input()` permite `UNBLOCKER` solo y en mayúsculas, exige la declaración de autorización y rechaza mezclas, grupos SERP y credenciales personalizadas. No cambia el estado desactivado por defecto.

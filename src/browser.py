@@ -11,9 +11,8 @@ import psutil
 from crawl4ai import AsyncWebCrawler, BrowserConfig, CacheMode, CrawlerRunConfig
 from crawl4ai.async_crawler_strategy import AsyncPlaywrightCrawlerStrategy
 from crawl4ai.browser_manager import BrowserManager
-from .diagnostics import event
+from .diagnostics import event, navigation_failure
 from .urls import is_challenge_url, redirect_details, safe_url, selection_state
-from .proxy import proxy_failure_code
 
 
 def classify_resource(path, *, is_document, commercial_kind, first_party):
@@ -105,6 +104,26 @@ async def acquire(data, *, proxy_config=None):
             event('PARADA', 'etapa=%s | estado=%s | código=%s | %s',
                   report['stage'], status, code, message, level='error' if status == 'error' else 'warning')
             stop.set()
+
+    def diagnose_failure(message, http_status=None, source='crawl-result'):
+        diagnosis = navigation_failure(message, http_status=http_status, source=source)
+        result_message_present = diagnosis['errorMessagePresent'] if source == 'crawl-result' else None
+        logger_errors = getattr(getattr(crawler, 'logger', None), 'safe_errors', [])
+        if diagnosis['category'] in ('unknown', 'crawl-wrapper'):
+            evidence = next((item for item in reversed(logger_errors)
+                             if item['category'] not in ('unknown', 'crawl-wrapper')), None)
+            if evidence is None and not diagnosis['errorMessagePresent']:
+                evidence = next((item for item in reversed(logger_errors) if item['errorMessagePresent']), None)
+            if evidence:
+                diagnosis = dict(evidence) | {'httpStatus': diagnosis['httpStatus']}
+        diagnosis.update(stage=report['stage'], loggerErrorCount=len(logger_errors),
+                         resultErrorMessagePresent=result_message_present)
+        report['navigationError'] = diagnosis
+        event('CAUSA_NAVEGACION', 'código=%s | categoría=%s | operación=%s | señales=%s | excepción=%s | fuente=%s | mensaje presente=%s | errores logger=%s',
+              diagnosis['code'], diagnosis['category'], diagnosis['operation'],
+              ','.join(diagnosis['signals']) or '(ninguna)', diagnosis['exceptionType'],
+              diagnosis['source'], diagnosis['errorMessagePresent'], diagnosis['loggerErrorCount'], level='warning')
+        return diagnosis['code']
 
     def redirect(source, location, status, category, cf_ray=None):
         detail = redirect_details(source, location, status, category, cf_ray, report['stage'])
@@ -318,20 +337,24 @@ async def acquire(data, *, proxy_config=None):
         await crawler.start()
         report['browserStartupSeconds'] = round(time.perf_counter() - started, 3)
         event('NAVEGADOR', 'Inicio completado en %.3f s.', report['browserStartupSeconds'])
+        report['stage'] = 'crawl-call'
+        call_started = time.perf_counter()
         result = await crawler.arun(data['url'], config=CrawlerRunConfig(
             cache_mode=CacheMode.DISABLED, wait_until='domcontentloaded', page_timeout=data['timeoutSeconds'] * 1000,
             delay_before_return_html=0.5, max_retries=0, magic=False, simulate_user=False,
             override_navigator=False, verbose=False, proxy_config=proxy_config))
+        report['crawlCallSeconds'] = round(time.perf_counter() - call_started, 6)
+        event('CRAWL_RESULT', 'success=%s | HTTP=%s | arun=%.6f s | before_goto=%s | respuestas registradas=%s',
+              result.success, result.status_code, report['crawlCallSeconds'], report['navigationCount'], len(report['requests']))
         if tasks:
             await asyncio.gather(*list(tasks), return_exceptions=True)
         if not result.success or result.status_code != 200:
-            transport_error = proxy_failure_code(getattr(result, 'error_message', None), result.status_code) if proxy_config is not None else None
+            failure_code = diagnose_failure(getattr(result, 'error_message', None), result.status_code)
             if result.status_code == 403:
                 fail('blocked', 'HTTP_403', 'Documento principal denegado; no se reintenta.')
-            elif transport_error:
-                fail('error', transport_error, 'Fallo de transporte proxy; detalle privado omitido y sin reintentos.')
             else:
-                fail('partial', 'NAVIGATION_ERROR', f'HTML HTTP {result.status_code}; Crawl4AI success={result.success}')
+                fail('partial' if failure_code.startswith('NAVIGATION_ERROR') else 'error', failure_code,
+                     'Falló Crawl4AI; consultar navigationError. Detalle privado omitido; sin reintentos.')
             return ''
         if len(result.html.encode()) > data['maxHtmlBytes']:
             event('TOPE_TAMANO', '100%% superado en HTML renderizado | límite=%s bytes', data['maxHtmlBytes'], level='warning')
@@ -359,15 +382,8 @@ async def acquire(data, *, proxy_config=None):
             if not stop.is_set():
                 report['status'] = 'received'
     except Exception as error:
-        message = re.sub(r'https?://[^\s\'"<>]+', lambda match: safe_url(match.group(0)), str(error))[:300]
-        code = 'BROWSER_UNAVAILABLE' if "Executable doesn't exist" in str(error) else type(error).__name__
-        if 'ERR_CERT' in str(error):
-            code = 'TLS_ERROR'
-        if proxy_config is not None:
-            # Playwright errors may serialize proxy settings outside a URL.
-            message = 'Fallo de navegador con proxy; detalle privado omitido. Tipo=' + type(error).__name__
-            code = proxy_failure_code(error) or code
-        fail('error', code, message)
+        code = diagnose_failure(error, source='exception')
+        fail('error', code, 'Excepción de adquisición; consultar navigationError. Detalle privado omitido; sin reintentos.')
     finally:
         report['stage'] = 'browser-close'
         event('CIERRE', 'Cerrando navegador y tareas pendientes.')

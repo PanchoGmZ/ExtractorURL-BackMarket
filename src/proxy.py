@@ -98,30 +98,47 @@ async def configure_proxy(actor, settings, *, session_id, timeout_seconds):
 
 
 def private_proxy_logger():
-    """Prevent third-party raw error logs; acquisition emits safe stage/HTTP logs."""
+    """Keep bounded, allow-listed error evidence without raw console/file logging."""
     from crawl4ai.async_logger import AsyncLoggerBase
+    from .diagnostics import navigation_failure
 
     class PrivateProxyLogger(AsyncLoggerBase):
         # Public logger interface: no dependence on AsyncLogger._log or file sinks.
         verbose = False
         log_file = None
 
+        def __init__(self):
+            self.safe_errors = []
+
         def debug(self, *args, **kwargs):
             return
 
-        info = success = warning = error = url_status = error_status = debug
+        info = success = warning = url_status = debug
+
+        def record_error(self, message):
+            self.safe_errors.append(navigation_failure(message, source='crawl4ai-logger'))
+            del self.safe_errors[:-4]
+
+        def error(self, message, tag='ERROR', **kwargs):
+            self.record_error(message)
+            params = kwargs.get('params')
+            if isinstance(params, dict):
+                for key in ('error', 'err', 'reason'):
+                    if isinstance(params.get(key), str):
+                        self.record_error(params[key])
+
+        def error_status(self, url, error, tag='ERROR', url_length=100):
+            self.record_error(error)
 
     return PrivateProxyLogger()
 
 
 def proxy_failure_code(message, http_status=None):
     """Classify private transport details without returning or logging their text."""
-    text = str(message or '')
-    if http_status == 407 or re.search(r'\b407\b|ERR_(?:PROXY_AUTH|INVALID_AUTH_CREDENTIALS)', text):
-        return 'PROXY_AUTH_ERROR'
-    if 'ERR_PROXY_CONNECTION' in text or 'ERR_TUNNEL_CONNECTION' in text:
-        return 'PROXY_CONNECTION_ERROR'
-    return None
+    from .diagnostics import navigation_failure
+    code = navigation_failure(message, http_status=http_status)['code']
+    return code if code in {'PROXY_AUTH_ERROR', 'PROXY_CONNECTION_ERROR',
+                           'PROXY_TUNNEL_ERROR', 'PROXY_CONFIGURATION_ERROR'} else None
 
 
 def proxy_observation(acquisition):
@@ -132,7 +149,7 @@ def proxy_observation(acquisition):
     code = (acquisition.get('error') or {}).get('code')
     connected = True if any(100 <= record['httpStatus'] <= 599 and record['httpStatus'] != 407
                             for record in documents) else None
-    if connected is None and code in {'PROXY_AUTH_ERROR', 'PROXY_CONNECTION_ERROR'}:
+    if connected is None and code in {'PROXY_AUTH_ERROR', 'PROXY_CONNECTION_ERROR', 'PROXY_TUNNEL_ERROR', 'TLS_ERROR'}:
         connected = False
     succeeded = (status == 200 and code != 'ACCESS_CHALLENGE'
                  and not documents[-1].get('explicitChallenge', False)) if documents else None

@@ -200,7 +200,7 @@ class ProxyTests(unittest.IsolatedAsyncioTestCase):
         proxy = ProxyConfig.from_string('http://test-user:synthetic-password@proxy.invalid:8000')
         for status, message, expected in (
             (None, 'net::ERR_PROXY_AUTH_REQUESTED password=synthetic-password', 'PROXY_AUTH_ERROR'),
-            (None, 'net::ERR_TUNNEL_CONNECTION_FAILED token=synthetic-token', 'PROXY_CONNECTION_ERROR'),
+            (None, 'net::ERR_TUNNEL_CONNECTION_FAILED token=synthetic-token', 'PROXY_TUNNEL_ERROR'),
             (407, 'cookie=synthetic-cookie', 'PROXY_AUTH_ERROR'),
             (403, '', 'HTTP_403'),
         ):
