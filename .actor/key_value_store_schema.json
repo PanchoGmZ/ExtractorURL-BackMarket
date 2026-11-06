@@ -46,6 +46,7 @@
               null
             ]
           },
+          "diagnosticMode": {"type": "boolean"},
           "extractionPerformed": {
             "type": "boolean"
           },
@@ -72,9 +73,9 @@
           "timeBudget": {
             "type": "object",
             "properties": {
-              "processSeconds": {"type": "number", "maximum": 55},
-              "acquisitionSeconds": {"type": "number", "maximum": 48},
-              "workSeconds": {"type": "number", "maximum": 52}
+              "processSeconds": {"type": "number", "maximum": 180},
+              "acquisitionSeconds": {"type": "number", "maximum": 160},
+              "workSeconds": {"type": "number", "maximum": 178}
             },
             "additionalProperties": false
           },

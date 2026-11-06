@@ -46,6 +46,24 @@ def diagnostic_path(path, category):
     return path
 
 
+def inspect_product_html(document, product_id):
+    """Return small HTML diagnostics only; never retain/log page text or markup."""
+    doc = lhtml.fromstring(document, parser=lhtml.HTMLParser(no_network=True))
+    title = doc.xpath('string(//title)')
+    body_text = ' '.join(doc.xpath('//body//text()[not(ancestor::script or ancestor::style or ancestor::noscript)]'))
+    h1_present = bool(doc.xpath('//h1[normalize-space()]'))
+    markers = {
+        'price': bool(doc.xpath('//*[@itemprop="price" or @data-testid="product-price" or @data-current-price]')),
+        'images': bool(doc.xpath('//*[@itemprop="image"] | //*[@data-testid="product-gallery"]//img | //*[@data-test="product-gallery"]//img')),
+        'specifications': bool(doc.xpath('//*[@itemprop="model"] | //*[@data-testid="specifications"] | //table//tr[th]')),
+        'variants': bool(doc.xpath('//fieldset | //*[@role="radiogroup"] | //*[@data-variant-group] | //select')),
+    }
+    return {'titlePresent': bool(title.strip()), 'h1Present': h1_present,
+        'requestedProductIdPresent': product_id in document.lower(), 'markers': markers,
+        'looksLikeRequestedProduct': bool(h1_present and product_id in document.lower() and markers['price'])}, \
+        title, body_text
+
+
 class NativeBrowserManager(BrowserManager):
     def _build_browser_args(self):
         options = super()._build_browser_args()
@@ -214,13 +232,38 @@ async def acquire(data, *, proxy_config=None, proxy_mode=None):
         return True
 
     async def read_response(response, record, kind):
+        stage = 'response-headers'
+        record.setdefault('bodyRead', {}).update(status='pending', bytes=None,
+            contentLengthBytes=record.get('contentLengthBytes'), source='playwright-response-body')
         try:
-            length = response.headers.get('content-length', '')
+            headers = getattr(response, 'headers', None)
+            if not isinstance(headers, dict):
+                raise TypeError('response headers unavailable')
+            length = headers.get('content-length', '')
             if length.isdigit() and int(length) > data['maxHtmlBytes']:
                 event('TOPE_TAMANO', '100%% superado | Content-Length=%s | límite=%s bytes', length, data['maxHtmlBytes'], level='warning')
                 fail('partial', 'RESPONSE_TOO_LARGE', f'Content-Length={length} bytes; tope={data["maxHtmlBytes"]} bytes')
+                record['bodyRead'].update(status='not-read', contentLengthBytes=int(length))
                 return
-            raw = await response.body()
+            record['bodyRead']['contentLengthBytes'] = int(length) if length.isdigit() else None
+            stage = 'response-body-access'
+            body_method = getattr(response, 'body', None)
+            if not callable(body_method):
+                raise AttributeError('response body method unavailable')
+            stage = 'response-body-read'
+            raw = await body_method()
+            if isinstance(raw, str):
+                raw = raw.encode('utf-8')
+            elif isinstance(raw, memoryview):
+                raw = raw.tobytes()
+            elif isinstance(raw, bytearray):
+                raw = bytes(raw)
+            if not isinstance(raw, bytes):
+                raise TypeError('response body is not bytes')
+            record['bodyRead'].update(status='read', bytes=len(raw))
+            record['bodyReadSucceeded'] = True
+            event('CUERPO', '%s | leído=True | bytes=%s | Content-Length=%s | fuente=Playwright Response.body()',
+                  record['kind'], len(raw), record['bodyRead']['contentLengthBytes'] or '(no informado)')
             if len(raw) > data['maxHtmlBytes']:
                 event('TOPE_TAMANO', '100%% superado | cuerpo=%s | límite=%s bytes', len(raw), data['maxHtmlBytes'], level='warning')
                 fail('partial', 'RESPONSE_TOO_LARGE', f'Cuerpo={len(raw)} bytes; tope={data["maxHtmlBytes"]} bytes')
@@ -233,6 +276,7 @@ async def acquire(data, *, proxy_config=None, proxy_mode=None):
                       record['kind'], 100 if usage >= 100 else 90 if usage >= 90 else 75,
                       usage, data['maxHtmlBytes'], level='warning')
             if kind:
+                stage = 'commercial-json-validation'
                 record['validJson'] = False
                 if 'application/json' not in record['contentType'].lower():
                     event('JSON', '%s: Content-Type no es JSON; no se usará como respuesta comercial.', kind, level='warning')
@@ -251,20 +295,38 @@ async def acquire(data, *, proxy_config=None, proxy_mode=None):
                 elif response.status == 200 and record['expectedStructure']:
                     responses[kind] = obj
             elif record['category'] == 'document' and 'text/html' in record['contentType'].lower():
+                stage = 'html-decode'
                 document = raw.decode('utf-8')
-                if embedded_commerce_candidate(document):
-                    doc = lhtml.fromstring(document, parser=lhtml.HTMLParser(no_network=True))
-                    title = doc.xpath('string(//title)')
-                    body_text = ' '.join(doc.xpath('//body//text()[not(ancestor::script or ancestor::style or ancestor::noscript)]'))
-                    if re.search(r'just a moment|verify.*human|security verification|captcha', title, re.I):
-                        challenge(response.url, response.url, response.status, response.headers.get('cf-ray'), 'verification-document-title')
-                    elif re.search(r'bot-need-challenge', body_text, re.I):
-                        challenge(response.url, response.url, response.status, response.headers.get('cf-ray'), 'displayed-challenge-error')
-                    else:
-                        accept_html(document, 'navigation-response', response.url)
+                stage = 'html-inspection'
+                inspection, title, body_text = inspect_product_html(document, data['productId'])
+                record['htmlInspection'] = inspection
+                event('HTML_INSPECCION', 'título=%s | H1=%s | UUID solicitado=%s | precio=%s | imágenes=%s | especificaciones=%s | variantes=%s | ficha candidata=%s',
+                      inspection['titlePresent'], inspection['h1Present'], inspection['requestedProductIdPresent'],
+                      inspection['markers']['price'], inspection['markers']['images'],
+                      inspection['markers']['specifications'], inspection['markers']['variants'],
+                      inspection['looksLikeRequestedProduct'])
+                if re.search(r'just a moment|verify.*human|security verification|captcha', title, re.I):
+                    challenge(response.url, response.url, response.status, headers.get('cf-ray'), 'verification-document-title')
+                elif re.search(r'bot-need-challenge', body_text, re.I):
+                    challenge(response.url, response.url, response.status, headers.get('cf-ray'), 'displayed-challenge-error')
+                elif method == 'crawl4ai_css' or embedded_commerce_candidate(document):
+                    # CSS selection/validation happens in the selected parser. Do not invoke
+                    # its candidate probe from Playwright's response event callback.
+                    accept_html(document, 'navigation-response', response.url)
         except Exception as error:
-            record['bodyReadError'] = type(error).__name__
-            event('LECTURA', '%s | no se pudo leer/validar el cuerpo | %s', record['kind'], type(error).__name__, level='warning')
+            error_type = type(error).__name__
+            read_stage = stage in {'response-headers', 'response-body-access', 'response-body-read'}
+            code = ('BODY_READ_ATTRIBUTE_ERROR' if error_type == 'AttributeError' else 'BODY_READ_ERROR') if read_stage else (
+                'HTML_INSPECTION_ATTRIBUTE_ERROR' if error_type == 'AttributeError' and stage.startswith('html-') else
+                'COMMERCIAL_JSON_ATTRIBUTE_ERROR' if error_type == 'AttributeError' else 'RESPONSE_PROCESSING_ERROR')
+            if read_stage:
+                record['bodyRead'].update(status='failed', failedAt=stage, errorCode=code)
+                record['bodyReadError'] = error_type
+            else:
+                record['validationError'] = {'stage': stage, 'errorCode': code, 'exceptionType': error_type}
+            event('LECTURA', '%s | cuerpo leído=%s | bytes=%s | etapa=%s | código=%s | tipo=%s',
+                  record['kind'], record.get('bodyReadSucceeded', False), record['bodyRead'].get('bytes'),
+                  stage, code, error_type, level='warning')
 
     async def before_goto(page, **kwargs):
         report['navigationCount'] += 1
@@ -360,10 +422,15 @@ async def acquire(data, *, proxy_config=None, proxy_mode=None):
                 # A resource name alone does not establish a blocked response or an interstitial.
                 event('ACCESO', 'Recurso de protección observado; la ficha no se clasifica como bloqueada solo por esta ruta.')
             if kind or is_document or protection_resource or challenge_page or response.status >= 400:
+                raw_content_length = response.headers.get('content-length', '')
                 record = {'url': safe_url(response.url), 'httpStatus': response.status,
                     'contentType': response.headers.get('content-type', ''),
                     'kind': kind or category, 'category': category,
                     'required': category in ('document', 'commercial'), 'explicitChallenge': challenge_page,
+                    'contentLengthBytes': int(raw_content_length) if raw_content_length.isdigit() else None,
+                    'bodyRead': {'status': 'not-requested', 'bytes': None,
+                                 'contentLengthBytes': int(raw_content_length) if raw_content_length.isdigit() else None,
+                                 'source': 'rendered-dom' if method == 'playwright_dom' else None},
                     'requestIds': {key: response.headers[key] for key in ('cf-ray', 'x-request-id') if key in response.headers}}
                 report['requests'].append(record)
                 document_length = response.headers.get('content-length', '')
@@ -382,6 +449,9 @@ async def acquire(data, *, proxy_config=None, proxy_mode=None):
                     if category == 'optional':
                         denied_optional.add((url.hostname, url.path))
                 if (kind or (is_document and method != 'playwright_dom')) and response.status == 200 and not challenge_page:
+                    record['bodyRead']['status'] = 'scheduled'
+                    if record['bodyRead']['source'] is None:
+                        record['bodyRead']['source'] = 'playwright-response-body'
                     task = asyncio.create_task(read_response(response, record, kind))
                     tasks.add(task)
                     task.add_done_callback(tasks.discard)
@@ -481,6 +551,42 @@ async def acquire(data, *, proxy_config=None, proxy_mode=None):
             await asyncio.wait(list(tasks), timeout=min(0.2, max(0, navigation_deadline - time.monotonic())))
         if not result.success or result.status_code != 200:
             failure_code = diagnose_failure(getattr(result, 'error_message', None), result.status_code)
+            documents = [r for r in report['requests'] if r.get('category') == 'document']
+            prior_document = documents[-1] if documents else None
+            fallback_html = getattr(result, 'html', None)
+            if (method == 'crawl4ai_css' and not stop.is_set() and prior_document
+                    and prior_document.get('httpStatus') == 200
+                    and 'text/html' in prior_document.get('contentType', '').lower()
+                    and isinstance(fallback_html, str) and fallback_html):
+                fallback_size = len(fallback_html.encode('utf-8'))
+                prior_document['crawl4aiHtmlFallback'] = {'available': True, 'bytes': fallback_size}
+                event('CRAWL_HTML_FALLBACK', 'Crawl4AI reportó fallo, pero conserva HTML del documento HTTP 200 | bytes=%s | se valida con el parser CSS.', fallback_size, level='warning')
+                if fallback_size <= data['maxHtmlBytes']:
+                    try:
+                        inspection, title, visible_text = inspect_product_html(fallback_html, data['productId'])
+                        prior_document['htmlInspection'] = inspection
+                        if (re.search(r'just a moment|verify.*human|security verification|captcha', title, re.I)
+                                or re.search(r'bot-need-challenge', visible_text, re.I)):
+                            challenge(prior_document.get('url', data['url']), prior_document.get('url', data['url']),
+                                      prior_document['httpStatus'], prior_document.get('requestIds', {}).get('cf-ray'),
+                                      'crawl4ai-result-verification-html')
+                            return ''
+                        accepted = accept_html(fallback_html, 'crawl4ai-result-html', prior_document.get('url', data['url']))
+                        if accepted:
+                            event('HTML_INSPECCION', 'título=%s | H1=%s | UUID solicitado=%s | ficha candidata=%s',
+                                  inspection['titlePresent'], inspection['h1Present'],
+                                  inspection['requestedProductIdPresent'], inspection['looksLikeRequestedProduct'])
+                            report['stage'] = 'html-ready'
+                            return fallback_html
+                    except Exception as error:
+                        prior_document['fallbackInspectionError'] = {
+                            'errorCode': 'HTML_INSPECTION_ATTRIBUTE_ERROR' if type(error).__name__ == 'AttributeError' else 'HTML_INSPECTION_ERROR',
+                            'exceptionType': type(error).__name__}
+                        event('CRAWL_HTML_FALLBACK', 'HTML retenido no pudo inspeccionarse | código=%s | tipo=%s',
+                              prior_document['fallbackInspectionError']['errorCode'], type(error).__name__, level='warning')
+                else:
+                    fail('partial', 'HTML_TOO_LARGE', f'HTML de Crawl4AI={fallback_size} bytes; tope={data["maxHtmlBytes"]} bytes')
+                    return ''
             if result.status_code == 403:
                 fail('blocked', 'HTTP_403', 'Documento principal denegado; no se reintenta.')
             else:
@@ -513,7 +619,9 @@ async def acquire(data, *, proxy_config=None, proxy_mode=None):
         elif html_ready.is_set() and not stop.is_set():
             if tasks:
                 available = max(0, navigation_deadline - time.monotonic())
-                response_wait = min(0.2, available) if embedded_commerce_candidate(html_snapshot) else available
+                response_wait = (min(0.2, available)
+                                 if method != 'nuxt' or embedded_commerce_candidate(html_snapshot)
+                                 else available)
                 await asyncio.wait(list(tasks), timeout=response_wait)
             if not stop.is_set():
                 document = html_snapshot

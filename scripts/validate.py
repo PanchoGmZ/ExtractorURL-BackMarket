@@ -19,8 +19,11 @@ def main():
     for key in ('input', 'output'):
         assert (ROOT / '.actor' / actor[key]).is_file()
     input_schema = json.loads((ROOT / '.actor/input_schema.json').read_text(encoding='utf-8'))
-    assert set(input_schema['properties']) == {'url', 'outputFormat', 'extractionMethod', 'proxyConfiguration', 'proxyAccessAuthorized'}
+    assert set(input_schema['properties']) == {'url', 'outputFormat', 'extractionMethod', 'diagnosticMode',
+        'diagnosticTimeoutSeconds', 'proxyConfiguration', 'proxyAccessAuthorized'}
     assert input_schema['properties']['extractionMethod']['default'] == 'nuxt'
+    assert input_schema['properties']['diagnosticMode']['default'] is False
+    assert input_schema['properties']['diagnosticTimeoutSeconds']['default'] == 180
     assert input_schema['required'] == ['url']
     assert input_schema['properties']['outputFormat']['default'] == 'reference1688'
     assert input_schema['properties']['proxyConfiguration']['default'] == {'useApifyProxy': False}

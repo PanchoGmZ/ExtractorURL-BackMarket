@@ -76,6 +76,14 @@ class CssMethodTests(unittest.TestCase):
         schema = json.loads((ROOT / '.actor/key_value_store_schema.json').read_text(encoding='utf-8'))['collections']['metadata']['jsonSchema']
         Draft7Validator(schema).validate(meta)
 
+    def test_valueless_itemtype_does_not_raise_attribute_error(self):
+        malformed_semantics = HTML.replace(
+            '<main itemtype="https://schema.org/Product"', '<main itemtype', 1)
+        output, meta, _, _ = extract_html(malformed_semantics, self.data)
+        self.assertEqual(output['title'], 'iPhone 14 Pro 128 GB')
+        self.assertEqual(output['price'], '429.00')
+        self.assertTrue(meta['domDiagnostics']['identityVerified'])
+
     def test_price_ambiguity_reference_only_and_currency_absence_do_not_fabricate_price(self):
         for changed in (
             HTML.replace('</del>', '</del><span data-current-price="430.00">USD 430.00</span>', 1),

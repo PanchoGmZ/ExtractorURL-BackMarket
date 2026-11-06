@@ -10,7 +10,11 @@ ACQUISITION_SECONDS = 48
 WORK_SECONDS = 52
 PERSIST_SECONDS = 53
 BROWSER_CLOSE_SECONDS = 2
+DIAGNOSTIC_DEFAULT_SECONDS = 180
+DIAGNOSTIC_RESERVE_SECONDS = 20
 _process_start = None
+_watchdog_timer = None
+_watchdog_lock = threading.Lock()
 
 
 class RunBudget:
@@ -22,6 +26,29 @@ class RunBudget:
 
     def elapsed(self):
         return time.monotonic() - self.started
+
+
+def _arm_watchdog(seconds):
+    global _watchdog_timer
+    if _process_start is None:
+        return
+
+    def expire():
+        os.write(2, f'[TOPE_PROCESO] RUN_TIME_LIMIT | limite={seconds:g} s | salida=1\n'.encode())
+        os._exit(1)
+
+    with _watchdog_lock:
+        if _watchdog_timer is not None:
+            _watchdog_timer.cancel()
+        timer = threading.Timer(RunBudget(_process_start).remaining(seconds), expire)
+        timer.daemon = True
+        _watchdog_timer = timer
+        timer.start()
+
+
+def configure_process_watchdog(seconds):
+    """Set the process-age safety cap after the Actor input selects its mode."""
+    _arm_watchdog(seconds)
 
 
 def arm_process_watchdog():
@@ -44,13 +71,9 @@ def arm_process_watchdog():
         except ValueError:
             pass
 
-    def expire():
-        os.write(2, b'[TOPE_PROCESO] RUN_TIME_LIMIT | limite=55 s | salida=1\n')
-        os._exit(1)
-
-    timer = threading.Timer(RunBudget(_process_start).remaining(), expire)
-    timer.daemon = True
-    timer.start()
+    # Input is fetched only after Actor initialization. Keep a bounded bootstrap
+    # guard, then configure the exact 55s/diagnostic cap when that input is read.
+    _arm_watchdog(DIAGNOSTIC_DEFAULT_SECONDS)
 
 
 def process_budget():

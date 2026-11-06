@@ -40,6 +40,8 @@ def parse_input(raw):
         raise ValueError('INPUT debe ser un objeto JSON')
     defaults = {'mode': 'product', 'source': 'backmarket', 'outputFormat': 'reference1688',
                 'extractionMethod': 'nuxt',
+                'diagnosticMode': False,
+                'diagnosticTimeoutSeconds': int(os.environ.get('BACKMARKET_DIAGNOSTIC_TIMEOUT_SECONDS', '180')),
                 'executionMode': os.environ.get('BACKMARKET_EXECUTION_MODE', 'live'),
                 'timeoutSeconds': int(os.environ.get('BACKMARKET_TIMEOUT_SECONDS', '48')),
                 'maxHtmlBytes': int(os.environ.get('BACKMARKET_MAX_HTML_BYTES', '4194304')),
@@ -48,6 +50,13 @@ def parse_input(raw):
     if set(raw) - (set(defaults) | {'url'}):
         raise ValueError('INPUT contiene campos desconocidos; usa el esquema Python actual')
     value = defaults | raw
+    if type(value['diagnosticMode']) is not bool:
+        raise ValueError('diagnosticMode debe ser booleano')
+    if type(value['diagnosticTimeoutSeconds']) is not int or not 30 <= value['diagnosticTimeoutSeconds'] <= 180:
+        raise ValueError('diagnosticTimeoutSeconds fuera de rango 30..180')
+    acquisition_cap = (value['diagnosticTimeoutSeconds'] - 20) if value['diagnosticMode'] else 48
+    if value['diagnosticMode']:
+        value['timeoutSeconds'] = acquisition_cap
     if (value['mode'], value['source'], value['outputFormat']) != ('product', 'backmarket', 'reference1688'):
         raise ValueError('Solo product/backmarket/reference1688')
     if value['executionMode'] not in {'live', 'offline'}:
@@ -60,7 +69,7 @@ def parse_input(raw):
             or url.password or url.fragment or not match):
         raise ValueError('URL compatible: https://www.backmarket.com/en-us/p/slug/UUID, con l/offerType opcionales y sin fragmento')
     selection_parameters(value['url'])
-    for key, low, high in [('timeoutSeconds', 5, 48), ('maxHtmlBytes', 1024, 8388608), ('maxMemoryMb', 256, 2048)]:
+    for key, low, high in [('timeoutSeconds', 5, acquisition_cap), ('maxHtmlBytes', 1024, 8388608), ('maxMemoryMb', 256, 2048)]:
         if type(value[key]) is not int or not low <= value[key] <= high:
             raise ValueError(f'{key} fuera de rango {low}..{high}')
     if not isinstance(value['htmlFile'], str):

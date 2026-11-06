@@ -102,6 +102,7 @@ class CloudLifecycleTests(unittest.IsolatedAsyncioTestCase):
     async def test_css_dispatch_uses_only_css_and_writes_one_aggregate(self):
         from test_dom_methods import HTML
         self.actor.input['extractionMethod'] = 'crawl4ai_css'
+        self.actor.input['diagnosticMode'] = True
         acquire = AsyncMock(return_value=(HTML, {}, {'status': 'received', 'finalUrl': self.case.input['url']}))
         with self.context(acquire), patch.object(entry, 'extract_html', side_effect=AssertionError('Nuxt must not run')):
             await entry.run()
@@ -109,6 +110,10 @@ class CloudLifecycleTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.actor.records[0]['price'], '429.00')
         self.assertEqual(self.actor.values['RUN_STATE']['extractionMethod'], 'crawl4ai_css')
         self.assertEqual(self.actor.values['PRODUCT_METADATA']['priceSource'], 'crawl4ai_css:visible-current-price')
+        self.assertTrue(self.actor.values['RUN_STATE']['diagnosticMode'])
+        self.assertEqual(self.actor.values['RUN_STATE']['timeBudget'],
+                         {'processSeconds': 180, 'acquisitionSeconds': 160, 'workSeconds': 178})
+        self.assertEqual(acquire.await_args.args[0]['timeoutSeconds'], 160)
         self.assertFalse((self.root / 'captures').exists())
 
     async def test_dom_dispatch_uses_rendered_fields_and_does_not_fallback_to_other_parsers(self):

@@ -1,5 +1,7 @@
 {
   "url": "",
   "outputFormat": "reference1688",
-  "extractionMethod": "nuxt"
+  "extractionMethod": "nuxt",
+  "diagnosticMode": false,
+  "diagnosticTimeoutSeconds": 180
 }

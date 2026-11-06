@@ -1,6 +1,7 @@
 """Run with F5 or .venv/Scripts/python -m src --input <INPUT.json>."""
-from .budget import (ACQUISITION_SECONDS, PERSIST_SECONDS, TOTAL_SECONDS, WORK_SECONDS,
-                     arm_process_watchdog, bounded, process_budget)
+from .budget import (ACQUISITION_SECONDS, DIAGNOSTIC_DEFAULT_SECONDS, DIAGNOSTIC_RESERVE_SECONDS,
+                     PERSIST_SECONDS, TOTAL_SECONDS, WORK_SECONDS, arm_process_watchdog,
+                     bounded, configure_process_watchdog, process_budget)
 
 if __name__ == '__main__':
     arm_process_watchdog()
@@ -61,10 +62,10 @@ def archive_previous_output(root, run_id):
 async def run(input_path=None, *, budget=None):
     budget = budget or process_budget()
     try:
-        async with asyncio.timeout(budget.remaining(WORK_SECONDS)):
-            await _run(input_path, budget)
+        async with asyncio.timeout(DIAGNOSTIC_DEFAULT_SECONDS) as run_timeout:
+            await _run(input_path, budget, run_timeout)
     except TimeoutError:
-        event('TOPE_PROCESO', 'RUN_TIME_LIMIT | etapa de inicio/cierre | límite de trabajo=%s s', WORK_SECONDS, level='error')
+        event('TOPE_PROCESO', 'RUN_TIME_LIMIT | se agotó el límite activo de proceso en inicio, trabajo o cierre.', level='error')
         try:
             state = json.loads((ROOT / 'reports/run.json').read_text(encoding='utf-8'))
             state.update(status='error', finishedAt=now(), logicalExitCode=1,
@@ -75,7 +76,7 @@ async def run(input_path=None, *, budget=None):
         return 1
 
 
-async def _run(input_path, budget):
+async def _run(input_path, budget, run_timeout):
     started = time.perf_counter()
     # F5 uses an Actor instance that closes normally instead of raising SystemExit
     # into the debugger. CLI and platform runs retain the SDK's normal exit code.
@@ -86,6 +87,7 @@ async def _run(input_path, budget):
              'runId': uuid.uuid4().hex, 'outputFile': None, 'timings': {},
              'timeBudget': {'processSeconds': TOTAL_SECONDS, 'acquisitionSeconds': ACQUISITION_SECONDS,
                             'workSeconds': WORK_SECONDS}}
+    work_cap, acquisition_cap, persist_cap = WORK_SECONDS, ACQUISITION_SECONDS, PERSIST_SECONDS
 
     def timing(name, begin, prior=0):
         state['timings'][name] = round(time.perf_counter() - begin + prior, 3)
@@ -121,7 +123,7 @@ async def _run(input_path, budget):
             # Let acquisition close its browser and the run persist final diagnostics
             # before closing the SDK. Do not race SDK shutdown against set_value().
             try:
-                await asyncio.wait_for(work_finished.wait(), timeout=min(3, max(0.001, budget.remaining(PERSIST_SECONDS))))
+                await asyncio.wait_for(work_finished.wait(), timeout=min(3, max(0.001, budget.remaining(persist_cap))))
             except TimeoutError:
                 event('ABORTANDO', 'Tiempo de cierre agotado; el SDK completará la terminación.', level='warning')
             await actor.exit(exit_code=143, event_listeners_timeout=timedelta(seconds=0.25), cleanup_timeout=timedelta(seconds=1))
@@ -143,6 +145,21 @@ async def _run(input_path, budget):
             product_input, proxy_settings = split_proxy_input(await actor.get_input())
             data = parse_input(product_input)
             state['extractionMethod'] = metadata['extractionMethod'] = data['extractionMethod']
+            state['diagnosticMode'] = data['diagnosticMode']
+            if data['diagnosticMode']:
+                process_cap = data['diagnosticTimeoutSeconds']
+                acquisition_cap = process_cap - DIAGNOSTIC_RESERVE_SECONDS
+                work_cap = max(1, process_cap - 2)
+                persist_cap = max(1, process_cap - 2)
+                data['timeoutSeconds'] = acquisition_cap
+                event('DIAGNOSTICO_EXTENDIDO', 'Activado | seguridad total=%s s | adquisición máxima=%s s | margen para trabajo final=2 s | el timeout Cloud sigue aplicando.',
+                      process_cap, acquisition_cap)
+            else:
+                process_cap = TOTAL_SECONDS
+            state['timeBudget'] = {'processSeconds': process_cap, 'acquisitionSeconds': acquisition_cap,
+                                   'workSeconds': work_cap}
+            configure_process_watchdog(process_cap)
+            run_timeout.reschedule(asyncio.get_running_loop().time() + budget.remaining(work_cap))
             event('METODO', 'extractionMethod=%s', data['extractionMethod'])
             state['proxy'] = proxy_settings.diagnostic('pending' if proxy_settings.enabled else 'disabled')
             state.update(url=data['url'], productId=data['productId'], executionMode=data['executionMode'])
@@ -150,10 +167,11 @@ async def _run(input_path, budget):
             event('INPUT', 'Válido | modo=%s | UUID=%s', data['executionMode'], data['productId'])
             event('SELECCION_URL', 'Parámetros solicitados=%s; se envía la URL completa sin convertir l/offerType a otros filtros.',
                   selection_parameters(data['url']))
-            data['_acquisitionDeadline'] = time.monotonic() + min(data['timeoutSeconds'], budget.remaining(ACQUISITION_SECONDS))
-            event('LIMITES', 'Adquisición=%s s (máx. 48, plazo compartido desde proceso) | respuesta=%s bytes (%.2f MiB; máx. 8) | memoria privada=%s MiB (máx. 2048)',
-                  data['timeoutSeconds'], data['maxHtmlBytes'], data['maxHtmlBytes'] / 1048576, data['maxMemoryMb'])
-            event('LIMITES', 'Proceso=55 s | adquisición hasta segundo 48 incluyendo cierre | trabajo hasta 52 s | una navegación, concurrencia=1.')
+            data['_acquisitionDeadline'] = time.monotonic() + min(data['timeoutSeconds'], budget.remaining(acquisition_cap))
+            event('LIMITES', 'Adquisición=%s s (máx. %s, plazo compartido desde proceso) | respuesta=%s bytes (%.2f MiB; máx. 8) | memoria privada=%s MiB (máx. 2048)',
+                  data['timeoutSeconds'], acquisition_cap, data['maxHtmlBytes'], data['maxHtmlBytes'] / 1048576, data['maxMemoryMb'])
+            event('LIMITES', 'Proceso=%s s | adquisición hasta segundo %s incluyendo cierre | trabajo hasta %s s | una navegación, concurrencia=1.',
+                  process_cap, acquisition_cap, work_cap)
             if data['executionMode'] == 'offline':
                 if data['extractionMethod'] == 'playwright_dom':
                     state.update(status='error', error={'code': 'DOM_LIVE_PAGE_REQUIRED',
@@ -392,7 +410,7 @@ async def _run(input_path, budget):
                   state['savedResults'])
             state['stage'] = 'finished'
         except asyncio.CancelledError:
-            if budget.remaining(WORK_SECONDS) <= 0:
+            if budget.remaining(work_cap) <= 0:
                 state.update(status='error', error={'code': 'RUN_TIME_LIMIT',
                     'message': 'Presupuesto de proceso agotado; finalizando sin reintentos.'})
                 exit_code = 1
@@ -415,8 +433,8 @@ async def _run(input_path, budget):
             metadata.update(status=state['status'], executionMode=state['executionMode'],
                             extractionPerformed=state['extractionPerformed'])
             try:
-                await bounded(actor.set_value('PRODUCT_METADATA', metadata), budget.remaining(PERSIST_SECONDS))
-                await bounded(actor.set_value('RUN_STATE', state), budget.remaining(PERSIST_SECONDS))
+                await bounded(actor.set_value('PRODUCT_METADATA', metadata), budget.remaining(persist_cap))
+                await bounded(actor.set_value('RUN_STATE', state), budget.remaining(persist_cap))
             except TimeoutError:
                 event('TOPE_PROCESO', 'Persistencia de diagnóstico agotada; se conserva el límite de proceso.', level='warning')
             save('reports/run.json', state)

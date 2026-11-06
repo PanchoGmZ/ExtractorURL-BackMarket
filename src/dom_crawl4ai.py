@@ -22,7 +22,10 @@ def prepare(html, document_url=None):
         if re.search(r'(?:display\s*:\s*none|visibility\s*:\s*hidden)', node.get('style', ''), re.I):
             node.decompose()
     candidates = [node for node in soup.select(ROOT_SELECTOR) if len(node.select('h1')) == 1]
-    specific = [node for node in candidates if node.get('itemtype', '').endswith('/Product')
+    # BeautifulSoup returns None for a valueless itemtype attribute; normalize
+    # it before suffix checks so one malformed/empty semantic attribute cannot
+    # abort inspection of an otherwise readable product page.
+    specific = [node for node in candidates if (node.get('itemtype') or '').endswith('/Product')
                 or node.get('data-testid') == 'product-page' or node.get('data-product-id')]
     roots = specific or [node for node in candidates if node.name == 'main' or node.get('role') == 'main']
     roots = [node for node in roots if not any(other != node and node in other.parents for other in roots)]

@@ -31,6 +31,20 @@
       "enumTitles": ["Nuxt (actual)", "Playwright DOM", "Crawl4AI CSS"],
       "default": "nuxt"
     },
+    "diagnosticMode": {
+      "title": "Modo diagnóstico extendido",
+      "type": "boolean",
+      "description": "Desactivado por defecto conserva los topes normales. Al activarlo suspende los cortes internos de 48/55 segundos; usa diagnosticTimeoutSeconds como límite total de seguridad. Configura también el timeout del run de Apify a 180 segundos o menos.",
+      "default": false
+    },
+    "diagnosticTimeoutSeconds": {
+      "title": "Límite total del modo diagnóstico (segundos)",
+      "type": "integer",
+      "description": "Límite de seguridad desde el inicio del proceso, entre 30 y 180 segundos. Se recomienda 180 para dejar tiempo a iniciar Chromium y cargar la ficha.",
+      "minimum": 30,
+      "maximum": 180,
+      "default": 180
+    },
     "proxyConfiguration": {
       "sectionCaption": "Proxy opcional — solo acceso autorizado",
       "title": "Apify Proxy (opcional)",

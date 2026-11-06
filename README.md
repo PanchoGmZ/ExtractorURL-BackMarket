@@ -9,12 +9,13 @@ Conecta este repositorio desde Apify Console, rama `main`, usando el `Dockerfile
 - **URL del producto**, obligatoria.
 - **Formato de salida**, `reference1688` predeterminado.
 - **Método de extracción**, `nuxt` predeterminado; alternativas `playwright_dom` y `crawl4ai_css`.
+- **Modo diagnóstico extendido**, desactivado por defecto. Al activarlo se puede ampliar el tope total hasta 180 s.
 
 Una sección adicional permite configurar Apify Proxy de forma opcional. Está desactivado por defecto.
 
 Se admiten fichas HTTPS de `www.backmarket.com/en-us/p/slug/UUID` y los parámetros comerciales `l` y `offerType`, sin duplicados. No se resuelven enlaces abreviados ni se inventan identificadores. Los demás parámetros se rechazan explícitamente.
 
-Configuración para Tucumpa: **2048 MB** de memoria y **55 s** de timeout del run, una URL. El límite externo del consumidor es 60 s; debe incluir también cola/asignación y arranque previo al proceso. No construir la imagen dentro de esa petición.
+Configuración de producción para Tucumpa: **2048 MB** de memoria y **55 s** de timeout del run, una URL. El límite externo del consumidor es 60 s; debe incluir también cola/asignación y arranque previo al proceso. No construir la imagen dentro de esa petición. Para diagnóstico manual, activa `diagnosticMode` y configura el timeout del run de Apify a **180 s** (o al valor menor que elijas en `diagnosticTimeoutSeconds`).
 
 ## Results / Output
 
@@ -66,6 +67,8 @@ El contrato actual exige `dimensions: null`: un valor declarado se conserva como
 
 En Apify Console, reconstruye el build de `main` y selecciona **Método de extracción**. Para F5 añade `"extractionMethod": "playwright_dom"` o `"crawl4ai_css"` al INPUT local. `nuxt` se usa si falta el campo. El modo offline de archivo admite CSS/Nuxt; Playwright DOM exige una página renderizada, sin sustituciones por otro parser.
 
+Para una prueba manual extendida, establece `diagnosticMode: true` y deja `diagnosticTimeoutSeconds: 180` (o un valor de 30 a 180). Esto desactiva los topes normales de adquisición/proceso de 48/55 s para esa ejecución. El Actor conserva una salvaguarda total de 180 s desde el inicio, reserva hasta 20 s para procesar y persistir y mantiene los topes de memoria/tamaño; el timeout del run de Apify también debe ser 180 s o menor. El modo normal mantiene 48/55 s. Vuelve a dejar `diagnosticMode: false` para producción.
+
 `[METODO]`, `[PRECIO_DOM]`, `[DOCUMENTO_PRODUCTO]`, `[DATOS_FALTANTES]`, `[FIN]` y `RUN_STATE` permiten comparar. `PRODUCT_METADATA` incluye `extractionMethod`, `priceVerification`, `domDiagnostics` y opciones verificadas. No se persiste el HTML completo. Las pruebas de página local con red abortada se activan opcionalmente con `BACKMARKET_LOCAL_DOM_TEST=1` al ejecutar `python -m unittest discover -s tests -p test_dom_methods.py`; el validador portable omite esa prueba de navegador.
 
 ## Acceso y errores
@@ -113,7 +116,7 @@ apify validate-schema
 
 No requieren capturas privadas, cuenta Apify ni navegación. Incluyen casos sintéticos claramente identificados y dobles del SDK para comprobar input Cloud, marcador local ignorado, un push agregado, desafío sin producto y aborto. No acreditan una nueva extracción real ni una ejecución Cloud.
 
-El proceso tiene un guardián de 55 s desde su creación (CLI/F5/Cloud), o desde ACTOR_STARTED_AT si Cloud declara un inicio anterior, armado antes de importar el SDK y Crawl4AI. El trabajo se cancela al segundo 52, los diagnósticos se intentan persistir hasta el segundo 53 y el cierre SDK tiene hasta 1 s. El guardián final puede terminar con código 1 sin garantizar los últimos diagnósticos si hay código síncrono/SDK atascado. Configurar también el timeout del run en 55 s; Python y el SO no ofrecen plazos de tiempo real.
+En modo normal, el guardián es de 55 s desde la creación del proceso (CLI/F5/Cloud), o desde ACTOR_STARTED_AT si Cloud declara un inicio anterior; el trabajo tiene tope de 52 s y la adquisición comparte 48 s. En `diagnosticMode`, el guardián configurable es de hasta 180 s, la adquisición termina 20 s antes y el trabajo se limita a 2 s antes del tope total. Configura el timeout de Apify acorde al modo (55 s normal, hasta 180 s diagnóstico). Python y el SO no ofrecen plazos de tiempo real; un arranque frío puede reducir el tiempo disponible.
 
 La adquisición comparte el plazo absoluto del segundo 48 con inicialización y proxy. El proxy tiene como máximo 10 s dentro de ese plazo; navegador/navegación usan lo que queda, reservando 2 s para cerrar Chromium. `BACKMARKET_TIMEOUT_SECONDS` admite 5..48 (predeterminado 48) y solo puede reducir el plazo compartido. Se mantienen 4 MiB por documento/JSON y 1024 MiB privados, ajustables con `BACKMARKET_MAX_HTML_BYTES` y `BACKMARKET_MAX_MEMORY_MB`.
 
