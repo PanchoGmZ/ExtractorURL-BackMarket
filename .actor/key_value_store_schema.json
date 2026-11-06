@@ -17,6 +17,7 @@
               "backmarket"
             ]
           },
+          "extractionMethod": {"type": "string", "enum": ["nuxt", "playwright_dom", "crawl4ai_css"]},
           "status": {
             "type": "string",
             "enum": [
@@ -285,6 +286,8 @@
               "type": "object"
             }
           },
+          "extractionMethod": {"type": "string", "enum": ["nuxt", "playwright_dom", "crawl4ai_css"]},
+          "domDiagnostics": {"type": "object", "description": "Evidencia semántica y códigos del parser DOM/CSS, sin HTML, scripts o credenciales."},
           "htmlSha256": {
             "type": "string"
           },

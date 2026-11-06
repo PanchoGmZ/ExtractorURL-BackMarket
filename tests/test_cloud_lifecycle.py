@@ -99,6 +99,62 @@ class CloudLifecycleTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.actor.values['RUN_STATE']['savedResults'], 0)
         self.assertEqual(self.actor.exits, [1])
 
+    async def test_css_dispatch_uses_only_css_and_writes_one_aggregate(self):
+        from test_dom_methods import HTML
+        self.actor.input['extractionMethod'] = 'crawl4ai_css'
+        acquire = AsyncMock(return_value=(HTML, {}, {'status': 'received', 'finalUrl': self.case.input['url']}))
+        with self.context(acquire), patch.object(entry, 'extract_html', side_effect=AssertionError('Nuxt must not run')):
+            await entry.run()
+        self.assertEqual(len(self.actor.records), 1)
+        self.assertEqual(self.actor.records[0]['price'], '429.00')
+        self.assertEqual(self.actor.values['RUN_STATE']['extractionMethod'], 'crawl4ai_css')
+        self.assertEqual(self.actor.values['PRODUCT_METADATA']['priceSource'], 'crawl4ai_css:visible-current-price')
+        self.assertFalse((self.root / 'captures').exists())
+
+    async def test_dom_dispatch_uses_rendered_fields_and_does_not_fallback_to_other_parsers(self):
+        self.actor.input['extractionMethod'] = 'playwright_dom'
+        raw = {'identity': {'rootFound': True, 'semantic': True, 'ids': [self.case.input['productId']]},
+               'titles': [{'text': 'Visible product'}], 'prices': [{'text': 'USD 50.00'}],
+               'images': [{'src': 'https://example.com/visible.jpg'}]}
+        acquire = AsyncMock(return_value=('<html></html>', {'_dom': raw}, {'status': 'received'}))
+        with self.context(acquire), patch.object(entry, 'extract_html', side_effect=AssertionError('Nuxt must not run')), \
+                patch('src.dom_crawl4ai.extract_html', side_effect=AssertionError('CSS must not run')):
+            await entry.run()
+        self.assertEqual(len(self.actor.records), 1)
+        self.assertEqual(self.actor.records[0]['price'], '50.00')
+        self.assertEqual(self.actor.values['RUN_STATE']['status'], 'partial')
+        self.assertEqual(self.actor.values['PRODUCT_METADATA']['extractionMethod'], 'playwright_dom')
+
+    async def test_access_failure_precedes_css_parser_and_preserves_only_valid_prior_200(self):
+        from test_dom_methods import HTML
+        self.actor.input['extractionMethod'] = 'crawl4ai_css'
+        failure = {'status': 'blocked', 'failureStage': 'navigation',
+                   'error': {'code': 'HTTP_403', 'message': 'document denied'},
+                   'requests': [{'category': 'document', 'httpStatus': 403}]}
+        acquire = AsyncMock(return_value=('', {}, failure))
+        with self.context(acquire), patch('src.dom_crawl4ai.extract_html', side_effect=AssertionError('No HTML to parse')):
+            await entry.run()
+        self.assertEqual(self.actor.values['RUN_STATE']['status'], 'blocked')
+        self.assertEqual(self.actor.records, [])
+        acquire = AsyncMock(return_value=(HTML, {}, dict(failure, candidateBeforeAccessFailure=True)))
+        with self.context(acquire):
+            await entry.run()
+        self.assertEqual(self.actor.values['RUN_STATE']['status'], 'blocked')
+        self.assertEqual(self.actor.values['RUN_STATE']['savedResults'], 1)
+        self.assertEqual(len(self.actor.records), 1)
+        self.assertEqual(self.actor.records[0]['price'], '429.00')
+
+    async def test_loaded_html_parser_failure_is_not_network_block(self):
+        self.actor.input['extractionMethod'] = 'crawl4ai_css'
+        acquire = AsyncMock(return_value=('<html></html>', {}, {'status': 'received'}))
+        with self.context(acquire), patch('src.dom_crawl4ai.extract_html', side_effect=ValueError('private parser details')):
+            await entry.run()
+        state = self.actor.values['RUN_STATE']
+        self.assertEqual(state['status'], 'error')
+        self.assertEqual(state['error']['code'], 'CSS_EXTRACTION_ERROR')
+        self.assertNotIn('private parser details', json.dumps(state))
+        self.assertEqual(self.actor.records, [])
+
     async def test_challenge_fails_without_a_product_or_stale_output(self):
         (self.root / 'output').mkdir()
         (self.root / 'output/product.json').write_text('{"old":true}', encoding='utf-8')

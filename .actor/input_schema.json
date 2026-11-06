@@ -23,6 +23,14 @@
       ],
       "default": "reference1688"
     },
+    "extractionMethod": {
+      "title": "Método de extracción",
+      "type": "string",
+      "description": "Un solo método por ejecución. Nuxt conserva el extractor actual; DOM lee campos renderizados con Playwright; CSS usa JsonCssExtractionStrategy sobre HTML sin scripts. Selectores DOM/CSS pendientes de validar con una captura real del sitio.",
+      "enum": ["nuxt", "playwright_dom", "crawl4ai_css"],
+      "enumTitles": ["Nuxt (actual)", "Playwright DOM", "Crawl4AI CSS"],
+      "default": "nuxt"
+    },
     "proxyConfiguration": {
       "sectionCaption": "Proxy opcional — solo acceso autorizado",
       "title": "Apify Proxy (opcional)",

@@ -87,11 +87,13 @@ def memory_mb():
 
 
 async def acquire(data, *, proxy_config=None, proxy_mode=None):
+    method = data.get('extractionMethod', 'nuxt')
     started = time.perf_counter()
     acquisition_deadline = min(time.monotonic() + data['timeoutSeconds'],
                                data.get('_acquisitionDeadline', float('inf')))
     navigation_deadline = acquisition_deadline - BROWSER_CLOSE_SECONDS
     report = {'status': 'running', 'url': safe_url(data['url']), 'navigationCount': 0,
+        'extractionMethod': method,
         'directApiRequests': 0, 'requests': [], 'peakPrivateMb': 0, 'peakRssMb': 0,
         'nativeAutomationVisible': None, 'browserClosed': False, 'stage': 'browser-start',
         'resourceErrors': [], 'optionalRequestsSuppressed': 0, 'redirects': [], 'navigationFailures': []}
@@ -110,6 +112,11 @@ async def acquire(data, *, proxy_config=None, proxy_mode=None):
              endpoint + '/technical_specifications': 'specifications'}
 
     def embedded_commerce_candidate(html):
+        if method == 'crawl4ai_css':
+            from .dom_crawl4ai import candidate
+            return candidate(html)
+        if method != 'nuxt':
+            return False
         return (data['productId'] in html.lower() and
                 all(marker in html for marker in ('selectedOffer', 'pickerGroups', 'specifications')))
 
@@ -321,7 +328,7 @@ async def acquire(data, *, proxy_config=None, proxy_mode=None):
             url = urlsplit(response.url)
             first_party = url.hostname == origin
             is_document = response.request.is_navigation_request() and response.frame == page.main_frame
-            kind = paths.get(url.path) if first_party else None
+            kind = paths.get(url.path) if first_party and method == 'nuxt' else None
             category = classify_resource(url.path, is_document=is_document,
                                          commercial_kind=kind, first_party=first_party)
             if 'firstHttpSeconds' not in report:
@@ -374,7 +381,7 @@ async def acquire(data, *, proxy_config=None, proxy_mode=None):
                           response.status, category, level='warning')
                     if category == 'optional':
                         denied_optional.add((url.hostname, url.path))
-                if (kind or is_document) and response.status == 200 and not challenge_page:
+                if (kind or (is_document and method != 'playwright_dom')) and response.status == 200 and not challenge_page:
                     task = asyncio.create_task(read_response(response, record, kind))
                     tasks.add(task)
                     task.add_done_callback(tasks.discard)
@@ -393,6 +400,16 @@ async def acquire(data, *, proxy_config=None, proxy_mode=None):
         visible_text = await page.evaluate("document.body ? document.body.innerText : ''")
         if re.search(r'bot-need-challenge', visible_text, re.I):
             challenge(data['url'], page.url, None, None, 'displayed-challenge-error')
+        if method == 'playwright_dom' and not stop.is_set() and '_dom' not in responses:
+            dom_started = time.perf_counter()
+            try:
+                from .dom_playwright import collect
+                responses['_dom'] = await collect(page)
+            except Exception:
+                report['parserError'] = {'code': 'DOM_READ_ERROR', 'stage': 'rendered-dom-read'}
+            finally:
+                report['domReadSeconds'] = round(time.perf_counter() - dom_started, 3)
+                event('TIEMPO', 'etapa=domRead | duración=%.3f s', report['domReadSeconds'])
         report['finalUrl'] = safe_url(page.url)
         report['pageSelection'] = selection_state(data['url'], page.url)
         event('SELECCION_URL', 'Estado=%s | solicitada=%s | final=%s', report['pageSelection']['status'],
@@ -408,7 +425,7 @@ async def acquire(data, *, proxy_config=None, proxy_mode=None):
         # A complete embedded commerce payload needs no image/body-visibility or
         # Markdown processing. The existing parser remains the source of truth.
         html = await page.content()
-        if embedded_commerce_candidate(html):
+        if method == 'playwright_dom' or embedded_commerce_candidate(html):
             await before_return(page, html)
 
     crawler.crawler_strategy.set_hook('before_goto', before_goto)
@@ -539,4 +556,7 @@ async def acquire(data, *, proxy_config=None, proxy_mode=None):
               report['status'], report['navigationCount'], report['directApiRequests'], report['browserClosed'])
         event('RECURSOS_OPCIONALES', 'Errores secundarios=%s | repeticiones opcionales impedidas=%s',
               len(report['resourceErrors']), report['optionalRequestsSuppressed'])
+        if not document and html_snapshot:
+            document = html_snapshot
+            report['candidateBeforeAccessFailure'] = True
     return document, responses, report

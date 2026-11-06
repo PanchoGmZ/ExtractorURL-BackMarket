@@ -2,6 +2,16 @@
 
 Fecha: 6 de noviembre de 2026.
 
+## Métodos seleccionables de extracción
+
+Input nuevo `extractionMethod`: `nuxt` por defecto, `playwright_dom` o `crawl4ai_css`. Un solo método, una navegación y un único registro agregado. Se conservan los transportes y el plazo de 55 s. DOM lee el estado renderizado por Playwright; CSS usa JsonCssExtractionStrategy con un perfil semántico de producto, sin scripts/JSON ni endpoints como fuentes. Los selectores están respaldados por pruebas sintéticas, no por HTML real de Back Market: las capturas disponibles contienen únicamente JSON comercial filtrado. Una nueva prueba autorizada del usuario deberá confirmar el markup real.
+
+Precio visible actual, moneda explícita y opciones seleccionadas se verifican por separado de `selectedOffer` (que se conserva para Nuxt). Peso DOM/CSS solo explícito; dimensiones declaradas en características/metadatos porque el contrato vigente exige `dimensions: null`. Sin nuevas librerías, LLM ni servicios. Diagnósticos en `extractionMethod`, `domDiagnostics`, `priceVerification`, tiempos, campos y estado; no se guarda HTML completo. Fallo de adquisición no se atribuye a un parser. Ante fallo posterior solo se conserva un candidato HTML 200 previo si título, precio, identidad y una imagen pasan validación, manteniendo el estado de acceso fallido y código 1.
+
+Revisar README para selectores exactos, sus límites y selección en Apify Console/F5. La configuración TLS insegura permanece exclusiva de Unblocker y temporal, no segura para producción. No se ejecuta scraping real ni un run pagado en esta preparación.
+
+Validación: 78 pruebas portables aprobadas y 1 prueba de Playwright con HTML sintético renderizado y red abortada, ejecutada por separado. El validador descubre 79 casos y omite ese caso de navegador por defecto. Sintaxis, cuatro esquemas, once campos y dependencias sin conflictos. Los selectores nuevos siguen pendientes de una ficha real autorizada.
+
 ## Plazo Tucumpa de 60 segundos
 
 Proceso limitado a 55 s con guardián desde creación del proceso (o ACTOR_STARTED_AT en Cloud si es anterior), inicializado antes de imports pesados. Trabajo hasta 52 s, intento de persistencia hasta 53 s y cierre SDK de hasta 1 s. El plazo de adquisición termina como máximo al segundo 48 del proceso y reserva dentro de él 2 s para cerrar navegador. La configuración del proxy consume como máximo 10 s de ese mismo reloj; no suma un presupuesto independiente. El navegador recibe el tiempo restante como `page_timeout`. El guardián final sale con código 1 si el cierre o código síncrono se atasca; los diagnósticos son de mejor esfuerzo en ese caso.

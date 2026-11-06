@@ -87,11 +87,12 @@ async def _run(input_path, budget):
              'timeBudget': {'processSeconds': TOTAL_SECONDS, 'acquisitionSeconds': ACQUISITION_SECONDS,
                             'workSeconds': WORK_SECONDS}}
 
-    def timing(name, begin):
-        state['timings'][name] = round(time.perf_counter() - begin, 3)
+    def timing(name, begin, prior=0):
+        state['timings'][name] = round(time.perf_counter() - begin + prior, 3)
         event('TIEMPO', 'etapa=%s | duración=%.3f s | desde proceso=%.3f s',
               name, state['timings'][name], budget.elapsed())
     metadata = {'productId': None, 'url': None, 'currency': None, 'variantGroups': []}
+    retained_failure = None
     exit_code = 0
     previous_output = archive_previous_output(ROOT, state['runId'])
     if previous_output:
@@ -141,6 +142,8 @@ async def _run(input_path, budget):
                 event('INPUT', 'Leyendo entrada con Actor.get_input().')
             product_input, proxy_settings = split_proxy_input(await actor.get_input())
             data = parse_input(product_input)
+            state['extractionMethod'] = metadata['extractionMethod'] = data['extractionMethod']
+            event('METODO', 'extractionMethod=%s', data['extractionMethod'])
             state['proxy'] = proxy_settings.diagnostic('pending' if proxy_settings.enabled else 'disabled')
             state.update(url=data['url'], productId=data['productId'], executionMode=data['executionMode'])
             metadata.update(productId=data['productId'], url=data['url'])
@@ -152,6 +155,10 @@ async def _run(input_path, budget):
                   data['timeoutSeconds'], data['maxHtmlBytes'], data['maxHtmlBytes'] / 1048576, data['maxMemoryMb'])
             event('LIMITES', 'Proceso=55 s | adquisición hasta segundo 48 incluyendo cierre | trabajo hasta 52 s | una navegación, concurrencia=1.')
             if data['executionMode'] == 'offline':
+                if data['extractionMethod'] == 'playwright_dom':
+                    state.update(status='error', error={'code': 'DOM_LIVE_PAGE_REQUIRED',
+                        'message': 'Playwright DOM requiere una página renderizada; no se sustituye por CSS/Nuxt en offline.'})
+                    raise RuntimeError('No hay página renderizada en modo offline')
                 state['proxy'] = proxy_settings.diagnostic('not-used-offline')
                 state['stage'] = 'offline-read'
                 path = local_path(data['htmlFile'])
@@ -239,14 +246,42 @@ async def _run(input_path, budget):
                     state.update(status=acquisition['status'], error=acquisition.get('error'))
                     if acquisition['status'] == 'blocked':
                         save('reports/access-blocked.json', state)
-                    raise RuntimeError('Navegación detenida; consultar adquisición en reports/run.json')
+                    if document and acquisition.get('candidateBeforeAccessFailure'):
+                        retained_failure = (acquisition['status'], acquisition.get('error'))
+                        event('CANDIDATO_PREVIO', 'Se validará solo el HTML 200 recibido antes del fallo; no se continúa navegando.', level='warning')
+                    else:
+                        raise RuntimeError('Navegación detenida; consultar adquisición en reports/run.json')
+                data['_documentUrl'] = acquisition.get('finalUrl')
                 state['extractionPerformed'] = True
             state['stage'] = 'transformation'
             extraction_started = time.perf_counter()
-            event('EXTRACCION', 'Procesando HTML: %s bytes | JSON comerciales recibidos: %s',
-                  len(document.encode('utf-8')), ', '.join(sorted(responses)) or 'ninguno; revisar datos incrustados')
-            output, metadata, missing, commercial = extract_html(document, data, responses)
-            timing('extraction', extraction_started)
+            event('EXTRACCION', 'Método=%s | HTML=%s bytes | fuentes HTTP comerciales recibidas=%s',
+                  data['extractionMethod'], len(document.encode('utf-8')),
+                  ', '.join(key for key in sorted(responses) if not key.startswith('_')) or '(ninguna)')
+            try:
+                if data['extractionMethod'] == 'nuxt':
+                    output, metadata, missing, commercial = extract_html(document, data, responses)
+                elif data['extractionMethod'] == 'crawl4ai_css':
+                    from .dom_crawl4ai import extract_html as extract_css
+                    output, metadata, missing, commercial = extract_css(document, data)
+                else:
+                    from .dom_playwright import extract_raw
+                    if acquisition.get('parserError'):
+                        raise ValueError('DOM_READ_ERROR')
+                    output, metadata, missing, commercial = extract_raw(responses.get('_dom', {}), data)
+            except Exception:
+                if data['extractionMethod'] != 'nuxt':
+                    code = (acquisition.get('parserError', {}).get('code', 'DOM_EXTRACTION_ERROR')
+                            if data['extractionMethod'] == 'playwright_dom' else 'CSS_EXTRACTION_ERROR')
+                    state.update(status='error', error={'code': code, 'message': 'Fallo del parser seleccionado; detalles privados omitidos.'})
+                raise
+            metadata['extractionMethod'] = data['extractionMethod']
+            if metadata.get('domDiagnostics', {}).get('verificationPage'):
+                state.update(status='blocked', error={'code': 'ACCESS_CHALLENGE',
+                    'message': 'El documento del método seleccionado es una página de verificación.'})
+                raise RuntimeError('Documento de verificación; no se guarda producto')
+            timing('extraction', extraction_started,
+                   state.get('acquisition', {}).get('domReadSeconds', 0) if data['extractionMethod'] == 'playwright_dom' else 0)
             if data['executionMode'] == 'live':
                 product = commercial.get('product', {})
                 uuid_matches = product.get('productId') == data['productId']
@@ -274,8 +309,12 @@ async def _run(input_path, budget):
             event('ESTRUCTURA', 'Nuxt=%s | JSON incrustado=%s | JSON-LD=%s | errores de análisis=%s | Product JSON-LD=%s',
                   diagnosis['nuxtScripts'], diagnosis['embeddedJsonScripts'], diagnosis['jsonLdScripts'],
                   diagnosis['scriptErrors'], diagnosis['jsonLdProductFound'])
-            event('PRECIO', 'selectedOffer.price.amount=%s | moneda de oferta=%s | precio original presente=%s | precio original usado=False',
-                  diagnosis['selectedOfferPriceFound'], diagnosis['selectedOfferCurrencyFound'], diagnosis['originalPricePresent'])
+            event('PRECIO' if data['extractionMethod'] == 'nuxt' else 'PRECIO_DOM',
+                  'selectedOffer.price.amount=%s | moneda de oferta=%s | precio original presente=%s | precio original usado=False' if data['extractionMethod'] == 'nuxt' else
+                  'precio visible verificado=%s | moneda=%s | marcadores de referencia=%s | precio original usado=False',
+                  diagnosis['selectedOfferPriceFound'] if data['extractionMethod'] == 'nuxt' else output['price'] is not None,
+                  diagnosis['selectedOfferCurrencyFound'] if data['extractionMethod'] == 'nuxt' else metadata['currency'],
+                  diagnosis['originalPricePresent'])
             price_check = metadata['priceVerification']
             event('PRECIO_VERIFICADO', 'estado=%s | motivo=%s | opciones seleccionadas comprobadas=%s',
                   price_check['status'], price_check['reason'], price_check['selectedOptionChecks'],
@@ -291,16 +330,28 @@ async def _run(input_path, budget):
                   sum(len(group['variants']) for group in output['variations'] or []))
             if missing:
                 event('DATOS_FALTANTES', '%s', ', '.join(missing), level='warning')
-                event('RECOMENDACION', 'Revisar el JSON incrustado y htmlInventory en PRODUCT_METADATA. Un JSON-LD aislado solo acredita datos parciales.', level='warning')
+                event('RECOMENDACION',
+                      'Revisar el JSON incrustado y htmlInventory en PRODUCT_METADATA. Un JSON-LD aislado solo acredita datos parciales.' if data['extractionMethod'] == 'nuxt' else
+                      'Revisar domDiagnostics y el perfil de selectores con HTML auténtico. No inferir campos ausentes ni cambiar de método automáticamente.', level='warning')
                 event('RECOMENDACION', 'Conservar Crawl4AI y el parser determinista mientras el HTML aporte los datos; cambiar de herramienta no garantiza recuperar campos ausentes.', level='warning')
             state['stage'] = 'schema-validation'
             schema = json.loads((ROOT / '.actor/dataset_schema.json').read_text(encoding='utf-8'))['fields']
             Draft7Validator(schema, format_checker=FormatChecker()).validate(output)
             event('CONTRATO', 'Once campos y tipos anidados válidos.')
-            state.update(status='success' if data['executionMode'] == 'live' and not missing else 'partial',
+            if retained_failure and not (output['title'] and output['price'] is not None and output['images']
+                    and metadata['priceVerification']['status'] == 'verified'
+                    and commercial.get('product', {}).get('productId') == data['productId']):
+                state.update(status=retained_failure[0], error=retained_failure[1])
+                raise RuntimeError('El candidato previo no pudo validarse; no se guarda producto')
+            state.update(status=retained_failure[0] if retained_failure else
+                         'success' if data['executionMode'] == 'live' and not missing else 'partial',
                          missingFields=missing)
+            if retained_failure:
+                state['error'] = retained_failure[1]
+                exit_code = 1
+                event('RESULTADO_CONSERVADO', 'Producto previo validado; se conservará un registro con estado de acceso=%s.', state['status'], level='warning')
             if not any(output[key] for key in ('title', 'price', 'images', 'characteristics', 'variations')):
-                state.update(status='partial', error={'code': 'NO_PRODUCT_DATA',
+                state.update(status='partial', error={'code': metadata.get('domDiagnostics', {}).get('errorCode') or 'NO_PRODUCT_DATA',
                     'message': 'No se identificaron datos comerciales; no se guarda un producto vacío.'})
                 raise RuntimeError('No hay producto verificable en el documento recibido')
             if missing:
@@ -319,17 +370,18 @@ async def _run(input_path, budget):
                 state['savedResults'] = 1
                 timing('datasetSave', storage_started)
                 # Filtered business data only. Never archive the complete page/framework configuration.
-                capture_dir = ROOT / 'captures' / data['productId']
-                capture_dir.mkdir(parents=True, exist_ok=True)
-                payload = json.dumps({'productId': data['productId'], 'data': commercial}, ensure_ascii=False)
-                payload = payload.replace('<', '\\u003c')
-                (capture_dir / 'commercial.html').write_text(
-                    '<!doctype html><html><head><meta charset="utf-8"><title>Filtered commercial capture</title></head>'
-                    '<body><script id="captured-commercial-data" type="application/json">' + payload + '</script></body></html>',
-                    encoding='utf-8')
-                save(capture_dir / 'provenance.json', {'url': data['url'], 'capturedAt': now(), 'filtered': True,
-                     'originalHtmlRetained': False, 'originalHtmlSha256': metadata['htmlSha256'],
-                     'htmlInventory': metadata['htmlInventory']})
+                if data['extractionMethod'] == 'nuxt':
+                    capture_dir = ROOT / 'captures' / data['productId']
+                    capture_dir.mkdir(parents=True, exist_ok=True)
+                    payload = json.dumps({'productId': data['productId'], 'data': commercial}, ensure_ascii=False)
+                    payload = payload.replace('<', '\\u003c')
+                    (capture_dir / 'commercial.html').write_text(
+                        '<!doctype html><html><head><meta charset="utf-8"><title>Filtered commercial capture</title></head>'
+                        '<body><script id="captured-commercial-data" type="application/json">' + payload + '</script></body></html>',
+                        encoding='utf-8')
+                    save(capture_dir / 'provenance.json', {'url': data['url'], 'capturedAt': now(), 'filtered': True,
+                         'originalHtmlRetained': False, 'originalHtmlSha256': metadata['htmlSha256'],
+                         'htmlInventory': metadata['htmlInventory']})
             state['counts'] = {key: len(output[key] or []) for key in ('images', 'characteristics', 'variations')}
             state.update(price=output['price'], currency=metadata['currency'], priceSource=metadata['priceSource'])
             save('output/product.json', output)

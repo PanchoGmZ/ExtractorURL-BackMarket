@@ -19,7 +19,8 @@ def main():
     for key in ('input', 'output'):
         assert (ROOT / '.actor' / actor[key]).is_file()
     input_schema = json.loads((ROOT / '.actor/input_schema.json').read_text(encoding='utf-8'))
-    assert set(input_schema['properties']) == {'url', 'outputFormat', 'proxyConfiguration', 'proxyAccessAuthorized'}
+    assert set(input_schema['properties']) == {'url', 'outputFormat', 'extractionMethod', 'proxyConfiguration', 'proxyAccessAuthorized'}
+    assert input_schema['properties']['extractionMethod']['default'] == 'nuxt'
     assert input_schema['required'] == ['url']
     assert input_schema['properties']['outputFormat']['default'] == 'reference1688'
     assert input_schema['properties']['proxyConfiguration']['default'] == {'useApifyProxy': False}
@@ -61,6 +62,7 @@ def main():
         print(stream.getvalue())
         raise SystemExit(1)
     print(json.dumps({'validation': 'passed', 'offlineTests': result.testsRun,
+        'skippedTests': len(result.skipped),
         'inputFields': list(input_schema['properties']), 'datasetFields': len(fields),
         'coreVersions': pins, 'networkRequests': 0, 'browserLaunched': False,
         'dockerBuild': 'separate verification required', 'apifyCloudRun': 'not performed'}, indent=2))

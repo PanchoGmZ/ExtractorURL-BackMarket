@@ -1,4 +1,5 @@
 {
   "url": "",
-  "outputFormat": "reference1688"
+  "outputFormat": "reference1688",
+  "extractionMethod": "nuxt"
 }

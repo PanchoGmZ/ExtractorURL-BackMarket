@@ -8,6 +8,7 @@ Conecta este repositorio desde Apify Console, rama `main`, usando el `Dockerfile
 
 - **URL del producto**, obligatoria.
 - **Formato de salida**, `reference1688` predeterminado.
+- **Método de extracción**, `nuxt` predeterminado; alternativas `playwright_dom` y `crawl4ai_css`.
 
 Una sección adicional permite configurar Apify Proxy de forma opcional. Está desactivado por defecto.
 
@@ -30,20 +31,42 @@ La moneda, verificaciones, disponibilidad, procedencia del peso y diagnóstico s
 
 - `success`: un producto agregado y cierre normal.
 - `partial`: si existen datos comerciales incompletos, se puede conservar un registro parcial; en live se termina con código 1 para que no figure como extracción completa.
-- Bloqueo, documento sin datos o fallo anterior a extracción: no se guarda un producto inexistente y se termina con código 1.
+- Bloqueo, documento sin datos o fallo anterior a extracción: no se guarda un producto inexistente y se termina con código 1. Si antes del fallo ya llegó HTML 200, solo se conserva un registro si después se validan identidad, título, precio y al menos una imagen; el estado continúa `blocked`/error, con diagnóstico y código 1.
 - Aborto: estado `aborted`, cierre coordinado y código 143.
 
 Cada run Cloud usa su Dataset predeterminado asignado por Apify; no se fija un ID de Dataset en código. Los archivos de ejecuciones locales no entran en la imagen. La salida local anterior se archiva antes de iniciar una nueva ejecución y `outputFile` empieza en `null`.
 
 ## Precio, peso y variantes
 
-El precio viene exclusivamente de `selectedOffer.price.amount`, con moneda publicada y comprobación de la selección. Nunca se sustituye por `priceWhenNew` ni por JSON-LD. Si no se verifica o una redirección modifica la selección `l`/`offerType`, queda `null` y se registra el motivo.
+En Nuxt el precio viene exclusivamente de `selectedOffer.price.amount`, con moneda publicada y comprobación de la selección. DOM/CSS leen solo el precio actual visible dentro de la ficha y publican su procedencia distinta en `PRODUCT_METADATA.priceSource`; no crean una oferta `selectedOffer` ficticia. Nunca se sustituyen precios por `priceWhenNew`, precios tachados o JSON-LD. La ambigüedad de precio/moneda, una opción seleccionada de otro UUID o una redirección que cambie `l`/`offerType` dejan `price: null` con el motivo.
 
 Los precios de variantes requieren asociación con opción, UUID y moneda. No se construyen combinaciones cartesianas.
 
 El peso conserva el contrato `{"value": 0.201, "unit": "kg"}` o `null`. Convierte g/kg/oz/lb y comprueba plausibilidad del tipo identificado. Para marca Apple y modelo estructurado exactamente iPhone 15 Plus se permite la referencia de [Apple: 201 g](https://support.apple.com/es-es/111830), con procedencia y fecha en metadatos. No se aplica a otros modelos ni a coincidencias de título/URL. `201 oz` no se reinterpreta como `201 g`.
 
 Es **peso físico**, no peso de envío: no se estima embalaje ni transporte. MOQ/dimensiones sin evidencia quedan en `null`; precios por volumen no disponibles son `[]`.
+
+## Métodos DOM/CSS y selectores
+
+Cada ejecución usa exclusivamente el método elegido, sin fallback automático:
+
+| Valor de extractionMethod | Fuente |
+| --- | --- |
+| `nuxt` | Parser actual de datos incrustados y JSON comerciales que ya genera la página. |
+| `playwright_dom` | `src/dom_playwright.py`: lectura directa de campos del DOM renderizado mediante un locator de Playwright y código fijo. Respeta visibilidad, atributos ARIA y estado actual de controles. |
+| `crawl4ai_css` | `src/dom_crawl4ai.py`: `JsonCssExtractionStrategy` 0.9.5 sobre el HTML recibido/renderizado, eliminando scripts y recomendaciones antes de seleccionar campos. |
+
+Los módulos nuevos comparten `src/dom_common.py` y el constructor de once campos `src/reference1688.py`, que también usa Nuxt. Modelo, color, almacenamiento, condición, batería, peso y dimensiones declaradas quedan en características y metadatos cuando están presentes. DOM/CSS no consultan endpoints ni leen JSON/Nuxt. Reutilizan la única navegación, proxy, plazos y cierre del Actor. Los endpoints internos no son fuentes imprescindibles para esos dos métodos; un error suyo se registra como secundario. Documento 403 o desafío confirmado siguen deteniendo la navegación.
+
+Perfil conservador `semantic-v1`: un único `h1` en `main`/`role=main` o un contenedor Product de schema.org; UUID declarado/canónico o URL final compatible; precio de `[itemprop=offers] [itemprop=price]`, `[data-testid=product-price]`, `[data-current-price]` o `[data-price-type=current]`. Moneda de `priceCurrency`, atributo del precio o texto ISO/€ /£, nunca de `$` solo. Galería `[data-testid=product-gallery]`, `[data-test=product-gallery]` o `itemprop=image`. Especificaciones `th/td`, filas de dos `td`, `dt` seguido de `dd`. Opciones agrupadas por `fieldset/legend`, `radiogroup`/ARIA o `select/label`; precio e ID de cada opción se leen de sus propios atributos/enlaces. Se excluyen `aside`, recomendaciones, Product anidados sin h1, nodos ocultos y precios tachados/originales. No hay combinaciones cartesianas.
+
+**Evidencia y límite:** las capturas reales locales contienen únicamente scripts JSON comerciales filtrados, sin DOM original. Los selectores anteriores están comprobados con los fixtures sintéticos de `tests/test_dom_methods.py`, incluidos productos distintos y recomendaciones adversarias; todavía no se afirma que coincidan con el markup actual de Back Market. Si faltan, `domDiagnostics` registra `DOM_*`/`CSS_*`, campos faltantes y verificación de identidad; no se inventan datos. Cambiar parser no corrige errores de transporte.
+
+El contrato actual exige `dimensions: null`: un valor declarado se conserva como característica y `domDiagnostics.dimensionsDeclared`. En DOM/CSS el peso solo procede de una masa física explícita, coherente y con unidad, sin completar ausencias con el peso oficial de Apple. Nuxt conserva su tratamiento previo del fabricante. CSS estático no conoce todos los estilos externos ni el estado de propiedades JS; Playwright sí lee el estado renderizado. No se abren pestañas, paneles de especificaciones, galerías ni variantes adicionales.
+
+En Apify Console, reconstruye el build de `main` y selecciona **Método de extracción**. Para F5 añade `"extractionMethod": "playwright_dom"` o `"crawl4ai_css"` al INPUT local. `nuxt` se usa si falta el campo. El modo offline de archivo admite CSS/Nuxt; Playwright DOM exige una página renderizada, sin sustituciones por otro parser.
+
+`[METODO]`, `[PRECIO_DOM]`, `[DOCUMENTO_PRODUCTO]`, `[DATOS_FALTANTES]`, `[FIN]` y `RUN_STATE` permiten comparar. `PRODUCT_METADATA` incluye `extractionMethod`, `priceVerification`, `domDiagnostics` y opciones verificadas. No se persiste el HTML completo. Las pruebas de página local con red abortada se activan opcionalmente con `BACKMARKET_LOCAL_DOM_TEST=1` al ejecutar `python -m unittest discover -s tests -p test_dom_methods.py`; el validador portable omite esa prueba de navegador.
 
 ## Acceso y errores
 
@@ -78,7 +101,7 @@ F5 evita interrumpir el depurador con `SystemExit`; su proceso puede terminar co
 - Arranque: `python -m src.main`; navegador headless en Linux.
 - Sin PyTorch, Transformers, Ollama ni modelos descargados. Crawl4AI incluye clientes de IA/stealth entre sus dependencias transitivas; estas funciones no se ejecutan y el acceso a modelos está deshabilitado.
 
-El build incluye un `--help` de arranque, sin abrir navegador. Docker no estaba disponible durante esta preparación; la imagen todavía debe construirse y comprobarse en Cloud.
+El build incluye un `--help` de arranque, sin abrir navegador. El usuario ya confirmó un contenedor Chromium funcional en Cloud; esta revisión no construye ni ejecuta una nueva imagen Cloud.
 
 ## Validación offline
 

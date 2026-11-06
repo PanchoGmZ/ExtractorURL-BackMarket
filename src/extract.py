@@ -11,6 +11,7 @@ from lxml import html as lhtml
 from .nuxt import UUID_RE, decode, find_commerce
 from .weight import product_weight
 from .urls import selection_parameters
+from .reference1688 import product_record
 
 PARAMETERS = {'grade', 'battery', 'premium_grade', 'battery_confidence_experiment',
               'cheapest_for_first_picker', 'storage', 'color'}
@@ -38,6 +39,7 @@ def parse_input(raw):
     if not isinstance(raw, dict):
         raise ValueError('INPUT debe ser un objeto JSON')
     defaults = {'mode': 'product', 'source': 'backmarket', 'outputFormat': 'reference1688',
+                'extractionMethod': 'nuxt',
                 'executionMode': os.environ.get('BACKMARKET_EXECUTION_MODE', 'live'),
                 'timeoutSeconds': int(os.environ.get('BACKMARKET_TIMEOUT_SECONDS', '48')),
                 'maxHtmlBytes': int(os.environ.get('BACKMARKET_MAX_HTML_BYTES', '4194304')),
@@ -50,6 +52,8 @@ def parse_input(raw):
         raise ValueError('Solo product/backmarket/reference1688')
     if value['executionMode'] not in {'live', 'offline'}:
         raise ValueError('executionMode debe ser live u offline')
+    if value['extractionMethod'] not in {'nuxt', 'playwright_dom', 'crawl4ai_css'}:
+        raise ValueError('extractionMethod debe ser nuxt, playwright_dom o crawl4ai_css')
     url = urlsplit(value.get('url', ''))
     match = re.fullmatch(r'/en-us/p/[^/]+/(' + UUID_RE.pattern + r')/?', url.path, re.I)
     if (url.scheme != 'https' or url.netloc != 'www.backmarket.com' or url.username
@@ -180,11 +184,9 @@ def transform(input_data, data, fallback=None):
         metadata_groups.append({'groupIndex': len(groups), 'id': group['id'], 'options': options})
         groups.append({'name': group['id'], 'variants': variants})
     titles = product.get('titles', {})
-    output = {'url': input_data['url'], 'title': titles.get('raw') or titles.get('default') or fallback.get('title'),
-        'price': main_price,
-        'productLadderPrices': [], 'moq': None, 'weight': weight, 'dimensions': None,
-        'images': images or fallback.get('images') or None, 'characteristics': attrs or None,
-        'variations': groups if 'pickers' in data else None, 'productId': input_data['productId']}
+    output = product_record(input_data, title=titles.get('raw') or titles.get('default') or fallback.get('title'),
+        price=main_price, weight=weight, images=images or fallback.get('images'),
+        characteristics=attrs, variations=groups if 'pickers' in data else None)
     missing = [k for k in ('title', 'price', 'images', 'characteristics', 'variations') if not output[k]]
     if not price.get('currency'):
         missing.append('selectedOffer.price.currency')
