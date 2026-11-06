@@ -5,8 +5,10 @@ import os
 import re
 import time
 from urllib.parse import urlsplit, urljoin
+from lxml import html as lhtml
 
 from .environment import ROOT
+from .budget import BROWSER_CLOSE_SECONDS
 import psutil
 from crawl4ai import AsyncWebCrawler, BrowserConfig, CacheMode, CrawlerRunConfig
 from crawl4ai.async_crawler_strategy import AsyncPlaywrightCrawlerStrategy
@@ -56,7 +58,7 @@ def make_crawler(*, proxy_enabled=False, ignore_https_errors=False):
     config = BrowserConfig(headless=os.name != 'nt', browser_type='chromium',
         chrome_channel='chrome' if os.name == 'nt' else 'chromium', ignore_https_errors=ignore_https_errors,
         enable_stealth=False, use_persistent_context=False, verbose=False)
-    event('TLS', 'VerificaciÃ³n de certificados HTTPS=%s', 'desactivada' if ignore_https_errors else 'activada')
+    event('TLS', 'Verificación de certificados HTTPS=%s', 'desactivada' if ignore_https_errors else 'activada')
     # Constructor defaults advertise a different OS/version. Retain native identity instead.
     config.user_agent = None
     config.browser_hint = None
@@ -86,11 +88,16 @@ def memory_mb():
 
 async def acquire(data, *, proxy_config=None, proxy_mode=None):
     started = time.perf_counter()
+    acquisition_deadline = min(time.monotonic() + data['timeoutSeconds'],
+                               data.get('_acquisitionDeadline', float('inf')))
+    navigation_deadline = acquisition_deadline - BROWSER_CLOSE_SECONDS
     report = {'status': 'running', 'url': safe_url(data['url']), 'navigationCount': 0,
         'directApiRequests': 0, 'requests': [], 'peakPrivateMb': 0, 'peakRssMb': 0,
         'nativeAutomationVisible': None, 'browserClosed': False, 'stage': 'browser-start',
         'resourceErrors': [], 'optionalRequestsSuppressed': 0, 'redirects': [], 'navigationFailures': []}
     responses, tasks = {}, set()
+    html_ready = asyncio.Event()
+    html_snapshot = ''
     denied_optional = set()
     stop = asyncio.Event()
     if proxy_config is not None:
@@ -101,6 +108,10 @@ async def acquire(data, *, proxy_config=None, proxy_mode=None):
     endpoint = '/product-page/products/' + data['productId']
     paths = {endpoint: 'product', endpoint + '/pickers': 'pickers',
              endpoint + '/technical_specifications': 'specifications'}
+
+    def embedded_commerce_candidate(html):
+        return (data['productId'] in html.lower() and
+                all(marker in html for marker in ('selectedOffer', 'pickerGroups', 'specifications')))
 
     def fail(status, code, message):
         if not stop.is_set():
@@ -176,6 +187,25 @@ async def acquire(data, *, proxy_config=None, proxy_mode=None):
               report['accessChallenge']['cfRaySource'], level='warning')
         fail('blocked', 'ACCESS_CHALLENGE', 'Desafío confirmado; no se sigue ni se resuelve automáticamente.')
 
+    def accept_html(html, source, final_url):
+        nonlocal html_snapshot
+        documents = [item for item in report['requests'] if item.get('category') == 'document']
+        if stop.is_set() or html_ready.is_set() or not documents or documents[-1]['httpStatus'] != 200:
+            return False
+        if 'text/html' not in documents[-1]['contentType'].lower():
+            return False
+        size = len(html.encode('utf-8'))
+        if size > data['maxHtmlBytes']:
+            fail('partial', 'HTML_TOO_LARGE', 'HTML excede el límite; no se procesa.')
+            return False
+        html_snapshot = html
+        report.update(finalUrl=safe_url(final_url), pageSelection=selection_state(data['url'], final_url),
+                      htmlReadySeconds=round(time.perf_counter() - started, 3), htmlSource=source)
+        event('HTML_LISTO', 'HTML 200 disponible en %.3f s | fuente=%s | bytes=%s | verificación comercial pendiente del parser',
+              report['htmlReadySeconds'], source, size)
+        html_ready.set()
+        return True
+
     async def read_response(response, record, kind):
         try:
             length = response.headers.get('content-length', '')
@@ -213,6 +243,18 @@ async def acquire(data, *, proxy_config=None, proxy_mode=None):
                     challenge(response.url, response.url, response.status, response.headers.get('cf-ray'), 'commercial-json-challenge')
                 elif response.status == 200 and record['expectedStructure']:
                     responses[kind] = obj
+            elif record['category'] == 'document' and 'text/html' in record['contentType'].lower():
+                document = raw.decode('utf-8')
+                if embedded_commerce_candidate(document):
+                    doc = lhtml.fromstring(document, parser=lhtml.HTMLParser(no_network=True))
+                    title = doc.xpath('string(//title)')
+                    body_text = ' '.join(doc.xpath('//body//text()[not(ancestor::script or ancestor::style or ancestor::noscript)]'))
+                    if re.search(r'just a moment|verify.*human|security verification|captcha', title, re.I):
+                        challenge(response.url, response.url, response.status, response.headers.get('cf-ray'), 'verification-document-title')
+                    elif re.search(r'bot-need-challenge', body_text, re.I):
+                        challenge(response.url, response.url, response.status, response.headers.get('cf-ray'), 'displayed-challenge-error')
+                    else:
+                        accept_html(document, 'navigation-response', response.url)
         except Exception as error:
             record['bodyReadError'] = type(error).__name__
             event('LECTURA', '%s | no se pudo leer/validar el cuerpo | %s', record['kind'], type(error).__name__, level='warning')
@@ -230,6 +272,8 @@ async def acquire(data, *, proxy_config=None, proxy_mode=None):
               report['navigationCount'], urlsplit(data['url']).path, report['nativeAutomationVisible'])
 
         def on_request_failed(request):
+            if report['status'] == 'received':
+                return  # Closing after a successful HTML handoff deliberately cancels Page.goto.
             try:
                 if not request.is_navigation_request() or request.frame != page.main_frame:
                     return
@@ -280,6 +324,13 @@ async def acquire(data, *, proxy_config=None, proxy_mode=None):
             kind = paths.get(url.path) if first_party else None
             category = classify_resource(url.path, is_document=is_document,
                                          commercial_kind=kind, first_party=first_party)
+            if 'firstHttpSeconds' not in report:
+                report['firstHttpSeconds'] = round(time.perf_counter() - started, 3)
+                event('TIEMPO', 'etapa=firstHttp | desde adquisición=%.3f s', report['firstHttpSeconds'])
+            if is_document and 'documentHttpSeconds' not in report:
+                report['documentHttpSeconds'] = round(time.perf_counter() - started, 3)
+                event('TIEMPO', 'etapa=documentHttp | desde adquisición=%.3f s | HTTP=%s',
+                      report['documentHttpSeconds'], response.status)
             protection_resource = category == 'protection'
             location = response.headers.get('location')
             redirected = response.status in (301, 302, 303, 307, 308) and bool(location)
@@ -308,6 +359,9 @@ async def acquire(data, *, proxy_config=None, proxy_mode=None):
                     'required': category in ('document', 'commercial'), 'explicitChallenge': challenge_page,
                     'requestIds': {key: response.headers[key] for key in ('cf-ray', 'x-request-id') if key in response.headers}}
                 report['requests'].append(record)
+                document_length = response.headers.get('content-length', '')
+                if is_document and document_length.isdigit() and int(document_length) > data['maxHtmlBytes']:
+                    fail('partial', 'RESPONSE_TOO_LARGE', 'Content-Length del documento excede el límite.')
                 event('HTTP', '%s | estado=%s | Content-Type=%s | ruta=%s | CF-Ray=%s',
                       record['kind'], response.status, record['contentType'] or '(ausente)',
                       path, record['requestIds'].get('cf-ray', '(ausente)'))
@@ -343,9 +397,22 @@ async def acquire(data, *, proxy_config=None, proxy_mode=None):
         report['pageSelection'] = selection_state(data['url'], page.url)
         event('SELECCION_URL', 'Estado=%s | solicitada=%s | final=%s', report['pageSelection']['status'],
               report['pageSelection']['requested'], report['pageSelection']['final'])
+        accepted = accept_html(html, 'browser-dom-hook', page.url)
+        # Handoff to acquire(): keep Crawl4AI from starting Markdown/scraping
+        # while the owner drains already received JSON and closes this context.
+        if accepted or html_ready.is_set():
+            await stop.wait()
         return page
 
+    async def after_goto(page, **kwargs):
+        # A complete embedded commerce payload needs no image/body-visibility or
+        # Markdown processing. The existing parser remains the source of truth.
+        html = await page.content()
+        if embedded_commerce_candidate(html):
+            await before_return(page, html)
+
     crawler.crawler_strategy.set_hook('before_goto', before_goto)
+    crawler.crawler_strategy.set_hook('after_goto', after_goto)
     crawler.crawler_strategy.set_hook('before_return_html', before_return)
 
     async def monitor():
@@ -373,24 +440,28 @@ async def acquire(data, *, proxy_config=None, proxy_mode=None):
                 event('TOPE_MEMORIA', '100%% superado | privado=%.1f/%s MiB', private, data['maxMemoryMb'], level='warning')
                 fail('partial', 'MEMORY_LIMIT', f'Memoria privada={private} MiB; tope={data["maxMemoryMb"]} MiB')
                 return
-            await asyncio.sleep(0.2)
+            await asyncio.sleep(1)
 
     async def navigate():
         event('NAVEGADOR', 'Abriendo Chrome visible en Windows o Chromium headless en contenedor; perfil temporal nuevo.')
         await crawler.start()
         report['browserStartupSeconds'] = round(time.perf_counter() - started, 3)
         event('NAVEGADOR', 'Inicio completado en %.3f s.', report['browserStartupSeconds'])
+        event('TIEMPO', 'etapa=browserStartup | duración=%.3f s', report['browserStartupSeconds'])
         report['stage'] = 'crawl-call'
         call_started = time.perf_counter()
         result = await crawler.arun(data['url'], config=CrawlerRunConfig(
-            cache_mode=CacheMode.DISABLED, wait_until='domcontentloaded', page_timeout=data['timeoutSeconds'] * 1000,
-            delay_before_return_html=0.5, max_retries=0, magic=False, simulate_user=False,
+            cache_mode=CacheMode.DISABLED, wait_until='domcontentloaded',
+            page_timeout=max(1, int((navigation_deadline - time.monotonic()) * 1000)),
+            delay_before_return_html=0, wait_for_images=False, scan_full_page=False,
+            ignore_body_visibility=True, body_visibility_timeout=1,
+            max_retries=0, magic=False, simulate_user=False,
             override_navigator=False, verbose=False, proxy_config=proxy_config))
         report['crawlCallSeconds'] = round(time.perf_counter() - call_started, 6)
         event('CRAWL_RESULT', 'success=%s | HTTP=%s | arun=%.6f s | before_goto=%s | respuestas registradas=%s',
               result.success, result.status_code, report['crawlCallSeconds'], report['navigationCount'], len(report['requests']))
         if tasks:
-            await asyncio.gather(*list(tasks), return_exceptions=True)
+            await asyncio.wait(list(tasks), timeout=min(0.2, max(0, navigation_deadline - time.monotonic())))
         if not result.success or result.status_code != 200:
             failure_code = diagnose_failure(getattr(result, 'error_message', None), result.status_code)
             if result.status_code == 403:
@@ -414,12 +485,24 @@ async def acquire(data, *, proxy_config=None, proxy_mode=None):
     monitor_task = asyncio.create_task(monitor())
     work = asyncio.create_task(navigate())
     stopper = asyncio.create_task(stop.wait())
+    ready = asyncio.create_task(html_ready.wait())
     document = ''
     try:
-        done, _ = await asyncio.wait([work, stopper], timeout=data['timeoutSeconds'], return_when=asyncio.FIRST_COMPLETED)
+        done, _ = await asyncio.wait([work, stopper, ready],
+            timeout=max(0, navigation_deadline - time.monotonic()), return_when=asyncio.FIRST_COMPLETED)
         if not done:
             event('TOPE_TIEMPO', '100%% alcanzado | presupuesto=%s s', data['timeoutSeconds'], level='warning')
             fail('partial', 'TIMEOUT', f'Presupuesto total agotado: {data["timeoutSeconds"]} s')
+        elif html_ready.is_set() and not stop.is_set():
+            if tasks:
+                available = max(0, navigation_deadline - time.monotonic())
+                response_wait = min(0.2, available) if embedded_commerce_candidate(html_snapshot) else available
+                await asyncio.wait(list(tasks), timeout=response_wait)
+            if not stop.is_set():
+                document = html_snapshot
+                report['status'] = 'received'
+                report['crawlCallSeconds'] = round(time.perf_counter() - started - report['browserStartupSeconds'], 6)
+                event('CRAWL_RESULT', 'HTML recibido por hook | arun postprocesamiento omitido | before_goto=%s', report['navigationCount'])
         elif work in done:
             document = await work
             if not stop.is_set():
@@ -429,21 +512,26 @@ async def acquire(data, *, proxy_config=None, proxy_mode=None):
         fail('error', code, 'Excepción de adquisición; consultar navigationError. Detalle privado omitido; sin reintentos.')
     finally:
         report['stage'] = 'browser-close'
+        close_started = time.perf_counter()
         event('CIERRE', 'Cerrando navegador y tareas pendientes.')
-        for task in [work, stopper, monitor_task, *list(tasks)]:
+        for task in [work, stopper, ready, monitor_task, *list(tasks)]:
             if not task.done():
                 task.cancel()
         # Close the browser before joining canceled navigation/response reads; otherwise
         # cancellation can wait on a socket that only browser.close() releases.
         try:
-            await asyncio.wait_for(crawler.close(), timeout=5)
+            await asyncio.wait_for(crawler.close(), timeout=max(0.001, min(BROWSER_CLOSE_SECONDS,
+                                                                        acquisition_deadline - time.monotonic())))
             report['browserClosed'] = True
             event('CIERRE', 'Navegador cerrado correctamente.')
         except Exception as error:
             report['closeError'] = type(error).__name__
             event('CIERRE', 'No se confirmó cierre completo | %s. Revisa la ventana abierta por esta ejecución.',
                   type(error).__name__, level='warning')
-        await asyncio.wait([work, stopper, monitor_task, *list(tasks)], timeout=2)
+        await asyncio.wait([work, stopper, ready, monitor_task, *list(tasks)],
+                           timeout=min(0.1, max(0, acquisition_deadline - time.monotonic())))
+        report['closeSeconds'] = round(time.perf_counter() - close_started, 3)
+        event('TIEMPO', 'etapa=browserClose | duración=%.3f s', report['closeSeconds'])
         report['seconds'] = round(time.perf_counter() - started, 3)
         event('RECURSOS', 'duración=%.3f s | pico privado=%.1f/%s MiB | RSS sumado=%.1f MiB (puede contar memoria compartida varias veces)',
               report['seconds'], report['peakPrivateMb'], data['maxMemoryMb'], report['peakRssMb'])

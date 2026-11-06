@@ -2,7 +2,17 @@
 
 Fecha: 6 de noviembre de 2026.
 
-## Diagnóstico local pendiente de publicación: fallo inmediato sin HTTP
+## Plazo Tucumpa de 60 segundos
+
+Proceso limitado a 55 s con guardián desde creación del proceso (o ACTOR_STARTED_AT en Cloud si es anterior), inicializado antes de imports pesados. Trabajo hasta 52 s, intento de persistencia hasta 53 s y cierre SDK de hasta 1 s. El plazo de adquisición termina como máximo al segundo 48 del proceso y reserva dentro de él 2 s para cerrar navegador. La configuración del proxy consume como máximo 10 s de ese mismo reloj; no suma un presupuesto independiente. El navegador recibe el tiempo restante como `page_timeout`. El guardián final sale con código 1 si el cierre o código síncrono se atasca; los diagnósticos son de mejor esfuerzo en ese caso.
+
+Se configura DOMContentLoaded, sin pausa fija ni espera por imágenes/networkidle. El cuerpo HTML 200 de esa misma navegación puede entregarse antes si tiene UUID/marcadores comerciales y supera controles de desafío, sin esperar scripts secundarios. Los hooks `after_goto` y `before_return_html` también entregan el DOM y cancelan el postprocesamiento/Markdown innecesario de Crawl4AI. El parser existente valida producto/oferta y conserva `partial` si faltan datos. HTTP 200 no equivale a producto validado: `[DOCUMENTO_PRODUCTO]` informa coincidencia de UUID, título y fuentes reales. `[TIEMPO]`/`[HTML_LISTO]`, `RUN_STATE.timings` y `RUN_STATE.acquisition` separan etapas. No hay nuevas solicitudes ni reintentos.
+
+Apify Console: reconstruir el commit y ejecutar con timeout **55 s**, memoria inicial **2048 MB** y `BACKMARKET_TIMEOUT_SECONDS=48` (o eliminar un valor anterior de 30). Usar un build ya construido. ACTOR_STARTED_AT permite descontar el inicio previo a Python si la plataforma lo proporciona; el Actor no controla asignación/cola ni la descarga de imagen. Los 5 s restantes del consumidor no garantizan un arranque frío. Tucumpa debe medir su latencia completa y cortar a 60 s. Validación local: 67 pruebas offline, sintaxis, cuatro esquemas y contrato 1688 aprobados; CLI --help correcto. No se midió extracción Cloud con estos cambios ni se ejecutó tráfico pagado.
+
+`ignore_https_errors=True` se conserva exclusivamente para Unblocker por decisión del usuario: es temporal y **no segura para producción**. Directo/Residential mantienen validación TLS; 403 y desafíos conservan sus paradas.
+
+## Histórico: instrumentación del fallo inmediato sin HTTP
 
 Evidencia comunicada por el usuario: Unblocker configurado, Chromium Linux iniciado, `arun()` devuelve `success=False`, `status_code=None` y cero respuestas observadas tras unos 44 ms. No se dispone del error normalizado de esa ejecución ni se ha reproducido una navegación. No se atribuye el fallo a TLS, permisos, túnel o incompatibilidad sin evidencia.
 
@@ -14,7 +24,7 @@ Códigos nuevos: `PROXY_TUNNEL_ERROR`, `PLAYWRIGHT_PROXY_UNSUPPORTED`, `PLAYWRIG
 
 Pruebas focalizadas offline: nueve casos nuevos (con tablas de errores/resultados simulados) y seis regresiones seleccionadas de proxy/directo/Residential/Unblocker, aprobados. Se verifican errores con HTTP `None`, fallo temprano, ausencia de detalle, privacidad, buffer del logger, no reintentos, cierre y mapeo real de `ProxyConfig`/`CrawlerRunConfig` a un `Browser.new_context` simulado. No se arrancó navegador, no se consultó Back Market ni servicios de proxy y no se usaron créditos Apify.
 
-La causa remota sigue indeterminada. Por la condición del usuario, estos cambios no se publican: no se hace commit/push ni despliegue. Falta obtener en una ejecución autorizada la proyección segura `navigationError` (código, operación, señales, tipo, fuente, presencia de error), la etapa, `crawlCallSeconds`, contador `before_goto`, versiones y commit del build. No compartir mensajes brutos, URLs con autenticación, cookies ni tokens. La próxima corrección de transporte debe apoyarse en esa evidencia; no se propone desactivar certificados, cambiar la identidad ni rotar IPs.
+Nota histórica: esta instrumentación se publicó posteriormente; la causa actual requiere el diagnóstico del build vigente. No compartir mensajes brutos, URLs con autenticación, cookies ni tokens.
 
 ## Actualización: Unblocker opcional
 
@@ -36,7 +46,7 @@ Estado actual comunicado por el usuario: el Actor ya construyó y ejecutó Chrom
 
 Se añade `src/proxy.py` con validación independiente del input y configuración oficial mediante `Actor.create_proxy_configuration(actor_proxy_input=...)`. El modo directo sigue por defecto. El módulo exige una declaración de autorización y un grupo explícito de datacenter o `RESIDENTIAL`; rechaza proxies personalizados, credenciales en el input, `UNBLOCKER`, `GOOGLE_SERP` y mezcla de residencial con otros grupos. La declaración no verifica permisos del proveedor ni sustituye el acceso al grupo en la cuenta Apify. Los permisos reales solo podrán comprobarse con la inicialización autorizada del SDK; no se certifican mediante estas pruebas offline.
 
-El SDK genera una sola URL de sesión por trabajo (`new_url(session_id=runId)`), que se convierte con `ProxyConfig.from_string()` y se pasa a `CrawlerRunConfig`. Se mantiene una navegación, `max_retries=0` y ninguna estrategia de rotación. No hay fallback a otra IP o conexión directa. El SDK puede consultar la cuenta y su propio servicio de estado para inicializar el proxy; esos controles no se han ejecutado en esta revisión. La inicialización tiene un presupuesto separado igual al límite de adquisición (hasta 30 s por defecto). La sesión solicita afinidad, sin garantizar una IP permanente por parte del proveedor.
+El SDK genera una sola URL de sesión por trabajo (`new_url(session_id=runId)` para Residential/Datacenter, sin sesión para Unblocker), que pasa por `ProxyConfig.from_string()` a `CrawlerRunConfig`. Una navegación, cero reintentos y ninguna rotación. La inicialización oficial puede consultar cuenta/servicio de estado y ahora tiene como máximo 10 s del plazo compartido. No se ejecutaron esos controles contra servicios reales en esta revisión.
 
 `src/main.py` separa el input de transporte antes del parser comercial y añade la etapa `proxy-setup`. Un fallo allí produce `PROXY_CONFIGURATION_ERROR`, código de salida 1, cero productos y ninguna navegación. `RUN_STATE.proxy` conserva activación, proveedor, grupos, país, modo de sesión, estado y observaciones HTTP. `configured` solo acredita configuración; `connected` registra respuesta HTTP de documento observada (excepto 407), no IP verificada; `documentRequestSucceeded` exige documento HTTP 200 sin desafío y no acredita extracción completa. Un 403 puede tener `connected=true` y sigue deteniendo la extracción. Se conserva `null` si falta evidencia. No se almacena allí URL de proxy, contraseña, token ni ID de sesión. El modo offline no inicializa proxy. Los marcadores locales de bloqueo conservan su comportamiento.
 
@@ -83,7 +93,7 @@ Antes de considerar la versión estable: comprobar build, primera ejecución per
 ## Primera prueba manual en Apify
 
 1. Conectar el repositorio GitHub, rama `main`, Dockerfile de la raíz.
-2. Empezar con 2048 MB de memoria y timeout del run de 120 s.
+2. Empezar con 2048 MB de memoria y timeout del run de 55 s.
 3. Introducir una URL compatible y mantener `reference1688`; sin proxy ni variables especiales.
 4. Revisar el estado del run y Results: como máximo un producto agregado; logs y metadatos explican resultados parciales o bloqueados.
 5. Ante un desafío o denegación de una fuente imprescindible, detener y gestionar el acceso con el proveedor. No encadenar reintentos ni cambiar de identidad.

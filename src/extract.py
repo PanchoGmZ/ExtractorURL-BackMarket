@@ -39,7 +39,7 @@ def parse_input(raw):
         raise ValueError('INPUT debe ser un objeto JSON')
     defaults = {'mode': 'product', 'source': 'backmarket', 'outputFormat': 'reference1688',
                 'executionMode': os.environ.get('BACKMARKET_EXECUTION_MODE', 'live'),
-                'timeoutSeconds': int(os.environ.get('BACKMARKET_TIMEOUT_SECONDS', '30')),
+                'timeoutSeconds': int(os.environ.get('BACKMARKET_TIMEOUT_SECONDS', '48')),
                 'maxHtmlBytes': int(os.environ.get('BACKMARKET_MAX_HTML_BYTES', '4194304')),
                 'maxMemoryMb': int(os.environ.get('BACKMARKET_MAX_MEMORY_MB', '1024')),
                 'htmlFile': os.environ.get('BACKMARKET_HTML_FILE', '')}
@@ -56,7 +56,7 @@ def parse_input(raw):
             or url.password or url.fragment or not match):
         raise ValueError('URL compatible: https://www.backmarket.com/en-us/p/slug/UUID, con l/offerType opcionales y sin fragmento')
     selection_parameters(value['url'])
-    for key, low, high in [('timeoutSeconds', 5, 30), ('maxHtmlBytes', 1024, 8388608), ('maxMemoryMb', 256, 2048)]:
+    for key, low, high in [('timeoutSeconds', 5, 48), ('maxHtmlBytes', 1024, 8388608), ('maxMemoryMb', 256, 2048)]:
         if type(value[key]) is not int or not low <= value[key] <= high:
             raise ValueError(f'{key} fuera de rango {low}..{high}')
     if not isinstance(value['htmlFile'], str):

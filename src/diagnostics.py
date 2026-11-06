@@ -117,8 +117,11 @@ def advice(code):
             'El proveedor exige verificación: detener y solicitar una vía de acceso autorizada.',
         ),
         'TIMEOUT': (
-            'Revisa la última etapa y HTTP registrados. BACKMARKET_TIMEOUT_SECONDS admite 5..30 s; no se eleva automáticamente.',
-            'Si ya está en 30 s, revisa conectividad y tiempos de inicio; no encadenes reintentos.',
+            'Revisa la última etapa y HTTP registrados. BACKMARKET_TIMEOUT_SECONDS admite 5..48 s dentro del plazo compartido.',
+            'Adquisición máxima 48 s, compartida con inicio/proxy; proceso máximo 55 s. No encadenes reintentos.',
+        ),
+        'RUN_TIME_LIMIT': (
+            'Se agotó el plazo global de trabajo. Revisa TIEMPO y las etapas; el proceso conserva su guardián de 55 s.',
         ),
         'MEMORY_LIMIT': (
             'Cierra aplicaciones pesadas y compara el pico privado con el límite interno de memoria.',

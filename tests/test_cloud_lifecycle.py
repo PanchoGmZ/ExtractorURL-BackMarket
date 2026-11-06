@@ -88,6 +88,17 @@ class CloudLifecycleTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.actor.values['RUN_STATE']['proxy']['status'], 'disabled')
         self.assertEqual(acquire.await_args.kwargs, {})
 
+    async def test_total_work_deadline_stops_pending_acquisition_and_persists_failure(self):
+        import time
+        from src.budget import RunBudget
+        async def pending(_):
+            await asyncio.Event().wait()
+        with self.context(pending), patch.object(entry, 'WORK_SECONDS', 0.02):
+            await asyncio.wait_for(entry.run(budget=RunBudget()), timeout=0.5)
+        self.assertEqual(self.actor.values['RUN_STATE']['error']['code'], 'RUN_TIME_LIMIT')
+        self.assertEqual(self.actor.values['RUN_STATE']['savedResults'], 0)
+        self.assertEqual(self.actor.exits, [1])
+
     async def test_challenge_fails_without_a_product_or_stale_output(self):
         (self.root / 'output').mkdir()
         (self.root / 'output/product.json').write_text('{"old":true}', encoding='utf-8')

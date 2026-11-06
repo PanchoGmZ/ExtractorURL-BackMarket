@@ -63,6 +63,20 @@
             "type": "object",
             "description": "Estados HTTP, Content-Type, errores y consumo observados durante una sola navegación."
           },
+          "timings": {
+            "type": "object",
+            "description": "Duración en segundos de inicialización, proxy, extracción y Dataset; cierre del SDK en logs.",
+            "additionalProperties": {"type": "number", "minimum": 0}
+          },
+          "timeBudget": {
+            "type": "object",
+            "properties": {
+              "processSeconds": {"type": "number", "maximum": 55},
+              "acquisitionSeconds": {"type": "number", "maximum": 48},
+              "workSeconds": {"type": "number", "maximum": 52}
+            },
+            "additionalProperties": false
+          },
           "proxy": {
             "type": "object",
             "description": "Configuración y estado del proxy sin URL, contraseña, token ni identificador de sesión.",

@@ -1,4 +1,10 @@
 """Run with F5 or .venv/Scripts/python -m src --input <INPUT.json>."""
+from .budget import (ACQUISITION_SECONDS, PERSIST_SECONDS, TOTAL_SECONDS, WORK_SECONDS,
+                     arm_process_watchdog, bounded, process_budget)
+
+if __name__ == '__main__':
+    arm_process_watchdog()
+
 import argparse
 import asyncio
 import json
@@ -52,7 +58,24 @@ def archive_previous_output(root, run_id):
     return target.relative_to(root).as_posix()
 
 
-async def run(input_path=None):
+async def run(input_path=None, *, budget=None):
+    budget = budget or process_budget()
+    try:
+        async with asyncio.timeout(budget.remaining(WORK_SECONDS)):
+            await _run(input_path, budget)
+    except TimeoutError:
+        event('TOPE_PROCESO', 'RUN_TIME_LIMIT | etapa de inicio/cierre | límite de trabajo=%s s', WORK_SECONDS, level='error')
+        try:
+            state = json.loads((ROOT / 'reports/run.json').read_text(encoding='utf-8'))
+            state.update(status='error', finishedAt=now(), logicalExitCode=1,
+                         error={'code': 'RUN_TIME_LIMIT', 'message': 'Plazo global agotado durante inicio/cierre.'})
+            save('reports/run.json', state)
+        except (OSError, ValueError):
+            pass
+        return 1
+
+
+async def _run(input_path, budget):
     started = time.perf_counter()
     # F5 uses an Actor instance that closes normally instead of raising SystemExit
     # into the debugger. CLI and platform runs retain the SDK's normal exit code.
@@ -60,7 +83,14 @@ async def run(input_path=None):
     actor = Actor(exit_process=False) if debugging_f5 else Actor
     state = {'source': 'backmarket', 'status': 'running', 'startedAt': now(),
              'executionMode': None, 'extractionPerformed': False, 'savedResults': 0, 'stage': 'output-prepare',
-             'runId': uuid.uuid4().hex, 'outputFile': None}
+             'runId': uuid.uuid4().hex, 'outputFile': None, 'timings': {},
+             'timeBudget': {'processSeconds': TOTAL_SECONDS, 'acquisitionSeconds': ACQUISITION_SECONDS,
+                            'workSeconds': WORK_SECONDS}}
+
+    def timing(name, begin):
+        state['timings'][name] = round(time.perf_counter() - begin, 3)
+        event('TIEMPO', 'etapa=%s | duración=%.3f s | desde proceso=%.3f s',
+              name, state['timings'][name], budget.elapsed())
     metadata = {'productId': None, 'url': None, 'currency': None, 'variantGroups': []}
     exit_code = 0
     previous_output = archive_previous_output(ROOT, state['runId'])
@@ -71,6 +101,8 @@ async def run(input_path=None):
     save('reports/run.json', state)
     async with actor:
         event('INICIO', 'Back Market | una ficha | sin reintentos automáticos')
+        state['timings']['initialization'] = round(budget.elapsed(), 3)
+        event('TIEMPO', 'etapa=initialization | desde proceso=%.3f s', budget.elapsed())
         task = asyncio.current_task()
         work_finished = asyncio.Event()
         abort_requested = False
@@ -88,10 +120,10 @@ async def run(input_path=None):
             # Let acquisition close its browser and the run persist final diagnostics
             # before closing the SDK. Do not race SDK shutdown against set_value().
             try:
-                await asyncio.wait_for(work_finished.wait(), timeout=10)
+                await asyncio.wait_for(work_finished.wait(), timeout=min(3, max(0.001, budget.remaining(PERSIST_SECONDS))))
             except TimeoutError:
                 event('ABORTANDO', 'Tiempo de cierre agotado; el SDK completará la terminación.', level='warning')
-            await actor.exit(exit_code=143, event_listeners_timeout=timedelta(seconds=1), cleanup_timeout=timedelta(seconds=5))
+            await actor.exit(exit_code=143, event_listeners_timeout=timedelta(seconds=0.25), cleanup_timeout=timedelta(seconds=1))
 
         actor.on(Event.ABORTING, abort)
         try:
@@ -115,9 +147,10 @@ async def run(input_path=None):
             event('INPUT', 'Válido | modo=%s | UUID=%s', data['executionMode'], data['productId'])
             event('SELECCION_URL', 'Parámetros solicitados=%s; se envía la URL completa sin convertir l/offerType a otros filtros.',
                   selection_parameters(data['url']))
-            event('LIMITES', 'Adquisición=%s s (máx. 30) | respuesta=%s bytes (%.2f MiB; máx. 8) | memoria privada=%s MiB (máx. 2048)',
+            data['_acquisitionDeadline'] = time.monotonic() + min(data['timeoutSeconds'], budget.remaining(ACQUISITION_SECONDS))
+            event('LIMITES', 'Adquisición=%s s (máx. 48, plazo compartido desde proceso) | respuesta=%s bytes (%.2f MiB; máx. 8) | memoria privada=%s MiB (máx. 2048)',
                   data['timeoutSeconds'], data['maxHtmlBytes'], data['maxHtmlBytes'] / 1048576, data['maxMemoryMb'])
-            event('LIMITES', 'Una navegación, concurrencia=1. Cierre adicional: hasta 5 s más espera de tareas de 2 s.')
+            event('LIMITES', 'Proceso=55 s | adquisición hasta segundo 48 incluyendo cierre | trabajo hasta 52 s | una navegación, concurrencia=1.')
             if data['executionMode'] == 'offline':
                 state['proxy'] = proxy_settings.diagnostic('not-used-offline')
                 state['stage'] = 'offline-read'
@@ -162,6 +195,7 @@ async def run(input_path=None):
                     raise RuntimeError('Acceso bloqueado anteriormente; ver reports/access-blocked.json')
                 proxy_config = None
                 if proxy_settings.enabled:
+                    proxy_started = time.perf_counter()
                     state['stage'] = 'proxy-setup'
                     state['proxy'] = proxy_settings.diagnostic('initializing')
                     event('PROXY', 'Configurando Apify Proxy autorizado | modo=%s | grupos=%s | país=%s | sesión IP=%s; una navegación y sin reintentos.',
@@ -171,15 +205,22 @@ async def run(input_path=None):
                         event('PROXY', 'UNBLOCKER no fija IP entre recursos. Conserva contexto de navegador; puede generar cargos por múltiples solicitudes.')
                     try:
                         proxy_config = await configure_proxy(actor, proxy_settings, session_id=state['runId'],
-                                                             timeout_seconds=data['timeoutSeconds'])
+                                                             timeout_seconds=min(10, max(0.001, data['_acquisitionDeadline'] - time.monotonic() - 2)))
                     except ProxyConfigurationError:
                         state['proxy'] = proxy_settings.diagnostic('error')
                         raise
+                    finally:
+                        timing('proxySetup', proxy_started)
                     state['proxy'] = proxy_settings.diagnostic('configured')
                     event('PROXY', 'Estado=configured | conexión y petición todavía no verificadas.')
                 else:
                     event('PROXY', 'Desactivado; se conserva la conexión directa.')
                 state['stage'] = 'acquisition'
+                if data['_acquisitionDeadline'] - time.monotonic() <= 2:
+                    state.update(status='partial', error={'code': 'TIMEOUT',
+                        'message': 'Inicio/proxy agotaron el plazo de adquisición; no se inicia otra navegación.'})
+                    raise RuntimeError('Plazo compartido de adquisición agotado')
+                acquisition_started = time.perf_counter()
                 event('NAVEGADOR', 'Cargando Crawl4AI desde el entorno Python del proyecto.')
                 from .browser import acquire
                 if proxy_config is None:
@@ -187,6 +228,7 @@ async def run(input_path=None):
                 else:
                     document, responses, acquisition = await acquire(
                         data, proxy_config=proxy_config, proxy_mode=proxy_settings.mode)
+                timing('acquisition', acquisition_started)
                 state['acquisition'] = acquisition
                 if proxy_config is not None:
                     state['proxy'].update(proxy_observation(acquisition))
@@ -200,9 +242,20 @@ async def run(input_path=None):
                     raise RuntimeError('Navegación detenida; consultar adquisición en reports/run.json')
                 state['extractionPerformed'] = True
             state['stage'] = 'transformation'
+            extraction_started = time.perf_counter()
             event('EXTRACCION', 'Procesando HTML: %s bytes | JSON comerciales recibidos: %s',
                   len(document.encode('utf-8')), ', '.join(sorted(responses)) or 'ninguno; revisar datos incrustados')
             output, metadata, missing, commercial = extract_html(document, data, responses)
+            timing('extraction', extraction_started)
+            if data['executionMode'] == 'live':
+                product = commercial.get('product', {})
+                uuid_matches = product.get('productId') == data['productId']
+                state['acquisition']['productDocument'] = {
+                    'verified': bool(uuid_matches and output['title']), 'uuidMatches': uuid_matches,
+                    'titleFound': bool(output['title']), 'commercialSources': sorted(commercial)}
+                event('DOCUMENTO_PRODUCTO', 'verificado=%s | UUID coincide=%s | título=%s | fuentes=%s',
+                      bool(uuid_matches and output['title']), uuid_matches,
+                      bool(output['title']), ','.join(sorted(commercial)) or '(ninguna)')
             if data['executionMode'] == 'live' and acquisition.get('pageSelection'):
                 metadata['pageSelection'] = acquisition['pageSelection']
                 if metadata['pageSelection']['status'] == 'changed_or_removed':
@@ -255,13 +308,16 @@ async def run(input_path=None):
             metadata.update(status=state['status'], executionMode=data['executionMode'],
                             extractionPerformed=state['extractionPerformed'])
             state['stage'] = 'storage'
+            storage_started = time.perf_counter()
             if data['executionMode'] == 'offline':
                 dataset = await actor.open_dataset(name='offline-validation')
                 await dataset.push_data(output)
                 state['savedResults'] = 1
+                timing('datasetSave', storage_started)
             else:
                 await actor.push_data(output)
                 state['savedResults'] = 1
+                timing('datasetSave', storage_started)
                 # Filtered business data only. Never archive the complete page/framework configuration.
                 capture_dir = ROOT / 'captures' / data['productId']
                 capture_dir.mkdir(parents=True, exist_ok=True)
@@ -279,14 +335,18 @@ async def run(input_path=None):
             save('output/product.json', output)
             state['outputFile'] = 'output/product.json'
             save(f"output/{data['productId']}.json", output)
-            await actor.set_value('PRODUCT_METADATA', metadata)
             event('GUARDADO', 'Dataset=%s | resultados=%s | copia=output/product.json',
                   'offline-validation (partial, sin extracción de red)' if data['executionMode'] == 'offline' else 'default',
                   state['savedResults'])
             state['stage'] = 'finished'
         except asyncio.CancelledError:
-            state['status'] = 'aborted'
-            exit_code = 143
+            if budget.remaining(WORK_SECONDS) <= 0:
+                state.update(status='error', error={'code': 'RUN_TIME_LIMIT',
+                    'message': 'Presupuesto de proceso agotado; finalizando sin reintentos.'})
+                exit_code = 1
+            else:
+                state['status'] = 'aborted'
+                exit_code = 143
         except Exception as error:
             if state['status'] in ('running', 'success') or state['stage'] == 'storage':
                 code = ('INVALID_INPUT' if state['stage'] == 'input' else
@@ -298,12 +358,15 @@ async def run(input_path=None):
             exit_code = 1
         finally:
             state['finishedAt'] = now()
-            state['elapsedSeconds'] = round(time.perf_counter() - started, 3)
+            state['elapsedSeconds'] = round(budget.elapsed(), 3)
             state['logicalExitCode'] = exit_code
             metadata.update(status=state['status'], executionMode=state['executionMode'],
                             extractionPerformed=state['extractionPerformed'])
-            await actor.set_value('PRODUCT_METADATA', metadata)
-            await actor.set_value('RUN_STATE', state)
+            try:
+                await bounded(actor.set_value('PRODUCT_METADATA', metadata), budget.remaining(PERSIST_SECONDS))
+                await bounded(actor.set_value('RUN_STATE', state), budget.remaining(PERSIST_SECONDS))
+            except TimeoutError:
+                event('TOPE_PROCESO', 'Persistencia de diagnóstico agotada; se conserva el límite de proceso.', level='warning')
             save('reports/run.json', state)
             stamp = state['startedAt'].replace(':', '-')
             save(f'reports/runs/{stamp}.json', state)
@@ -316,18 +379,21 @@ async def run(input_path=None):
                       state['status'], exit_code, level='warning')
             event('DIAGNOSTICO', 'Informe: reports/run.json. Comparte la consola completa desde INICIO hasta FIN y cualquier traceback posterior; no incluyas cookies ni credenciales.')
             work_finished.set()
-        if exit_code:
-            if debugging_f5:
-                actor.exit_code = exit_code
-            else:
-                await actor.exit(exit_code=exit_code)
+        cleanup_started = time.perf_counter()
+        try:
+            await actor.exit(exit_code=exit_code, event_listeners_timeout=timedelta(seconds=0.25),
+                             cleanup_timeout=timedelta(seconds=min(1, max(0.001, budget.remaining()))))
+        finally:
+            timing('sdkClose', cleanup_started)
 
 
 def main():
     parser = argparse.ArgumentParser(description='Back Market: Crawl4AI sin LLM')
     parser.add_argument('--input', help='JSON local dentro del proyecto')
     args = parser.parse_args()
-    asyncio.run(run(args.input))
+    code = asyncio.run(run(args.input))
+    if code and os.environ.get('BACKMARKET_F5') != '1':
+        raise SystemExit(code)
 
 
 if __name__ == '__main__':
