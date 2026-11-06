@@ -1,7 +1,7 @@
 {
     "$schema":  "https://apify.com/schemas/v1/actor.ide.json",
     "actorSpecification":  1,
-    "name":  "backmarket-scraper",
+    "name":  "backmarket-url-extractor",
     "title":  "Back Market — TU CUMPA",
     "description":  "Crawl4AI sin LLM: HTML y JSON comercial a contrato 1688, con estados y procedencia explícitos.",
     "version":  "0.1",
