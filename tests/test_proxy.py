@@ -23,6 +23,7 @@ class ProxyTests(unittest.IsolatedAsyncioTestCase):
         for raw in ({'url': 'not-navigated'}, {'url': 'not-navigated', 'proxyConfiguration': {'useApifyProxy': False}}):
             product, settings = split_proxy_input(raw)
             self.assertEqual(product, {'url': 'not-navigated'})
+            self.assertEqual(settings.mode, 'direct')
             self.assertIsNone(await configure_proxy(actor, settings, session_id='test', timeout_seconds=1))
         actor.create_proxy_configuration.assert_not_awaited()
 
@@ -32,7 +33,10 @@ class ProxyTests(unittest.IsolatedAsyncioTestCase):
             {'proxyConfiguration': {'useApifyProxy': True}, 'proxyAccessAuthorized': True},
             {'proxyConfiguration': {'useApifyProxy': 'true'}},
             {'proxyAccessAuthorized': 'true'},
-            {'proxyConfiguration': {'useApifyProxy': True, 'apifyProxyGroups': ['UNBLOCKER']}, 'proxyAccessAuthorized': True},
+            {'proxyConfiguration': {'useApifyProxy': True, 'apifyProxyGroups': ['UNBLOCKER']}},
+            {'proxyConfiguration': {'useApifyProxy': True, 'apifyProxyGroups': ['UNBLOCKER', 'RESIDENTIAL']}, 'proxyAccessAuthorized': True},
+            {'proxyConfiguration': {'useApifyProxy': True, 'apifyProxyGroups': ['UNBLOCKER', 'TEST_GROUP']}, 'proxyAccessAuthorized': True},
+            {'proxyConfiguration': {'useApifyProxy': True, 'apifyProxyGroups': ['unblocker']}, 'proxyAccessAuthorized': True},
             {'proxyConfiguration': {'useApifyProxy': True, 'apifyProxyGroups': ['GOOGLE_SERP']}, 'proxyAccessAuthorized': True},
             {'proxyConfiguration': {'useApifyProxy': True, 'apifyProxyGroups': ['RESIDENTIAL', 'TEST_GROUP']}, 'proxyAccessAuthorized': True},
         ):
@@ -122,6 +126,57 @@ class ProxyTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn('session-' + 'a' * 32, config.username)
         self.assertIn('country-US', config.username)
         self.assertIsInstance(CrawlerRunConfig(proxy_config=config).proxy_config, ProxyConfig)
+
+    async def test_unblocker_has_no_session_and_uses_official_sdk_configuration(self):
+        _, settings = split_proxy_input({'proxyConfiguration': {
+            'useApifyProxy': True, 'apifyProxyGroups': ['UNBLOCKER']}, 'proxyAccessAuthorized': True})
+        sdk_config = SimpleNamespace(new_url=AsyncMock(
+            return_value='http://groups-UNBLOCKER:synthetic-password@proxy.invalid:8000'))
+        actor = SimpleNamespace(create_proxy_configuration=AsyncMock(return_value=sdk_config))
+        config = await configure_proxy(actor, settings, session_id='internal_run', timeout_seconds=1)
+        actor.create_proxy_configuration.assert_awaited_once_with(actor_proxy_input={
+            'useApifyProxy': True, 'apifyProxyGroups': ['UNBLOCKER'], 'apifyProxyCountry': None})
+        sdk_config.new_url.assert_awaited_once_with()
+        self.assertNotIn('session-', config.username)
+        self.assertEqual(settings.diagnostic('configured')['sessionMode'], 'not-supported')
+        self.assertEqual(settings.mode, 'unblocker')
+        self.assertEqual(config.password, 'synthetic-password')
+        self.assertIsNone(CrawlerRunConfig(proxy_config=config, max_retries=0).proxy_rotation_strategy)
+        self.assertNotIn('synthetic-password', json.dumps(settings.diagnostic('configured')))
+
+    async def test_unblocker_url_generation_and_linux_browser_configuration_offline(self):
+        from apify import ProxyConfiguration
+        from crawl4ai import AsyncWebCrawler
+        from crawl4ai.async_crawler_strategy import AsyncPlaywrightCrawlerStrategy
+        from src.browser import make_crawler
+        # SDK URL generation only: initialize() would contact a real service.
+        sdk_config = ProxyConfiguration(password='synthetic-password', groups=['UNBLOCKER'])
+        config = ProxyConfig.from_string(await sdk_config.new_url())
+        self.assertEqual(config.username, 'groups-UNBLOCKER')
+        run_config = CrawlerRunConfig(proxy_config=config, max_retries=0)
+        self.assertIs(run_config.proxy_config, config)
+        # Construct the real objects, never start Chromium or call arun().
+        with patch('src.browser.os', SimpleNamespace(name='posix')), \
+                patch('src.browser.AsyncWebCrawler.start', new_callable=AsyncMock) as start:
+            crawler = make_crawler(proxy_enabled=True)
+        start.assert_not_awaited()
+        self.assertIsInstance(crawler, AsyncWebCrawler)
+        self.assertIsInstance(crawler.crawler_strategy, AsyncPlaywrightCrawlerStrategy)
+        self.assertTrue(crawler.browser_config.headless)
+        self.assertFalse(crawler.browser_config.use_persistent_context)
+        self.assertFalse(crawler.browser_config.ignore_https_errors)
+        self.assertFalse(crawler.browser_config.enable_stealth)
+
+    async def test_unblocker_setup_failure_keeps_credentials_private(self):
+        _, settings = split_proxy_input({'proxyConfiguration': {
+            'useApifyProxy': True, 'apifyProxyGroups': ['UNBLOCKER']}, 'proxyAccessAuthorized': True})
+        sdk_config = SimpleNamespace(new_url=AsyncMock(side_effect=RuntimeError('synthetic-password synthetic-token')))
+        actor = SimpleNamespace(create_proxy_configuration=AsyncMock(return_value=sdk_config))
+        with self.assertRaises(ProxyConfigurationError) as caught:
+            await configure_proxy(actor, settings, session_id='internal_run', timeout_seconds=1)
+        sdk_config.new_url.assert_awaited_once_with()
+        for private in ('synthetic-password', 'synthetic-token'):
+            self.assertNotIn(private, str(caught.exception))
 
     async def test_configuration_connection_and_request_are_separate(self):
         self.assertEqual(proxy_observation({})['connected'], None)

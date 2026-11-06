@@ -1,6 +1,6 @@
 # Back Market URL Extractor — TU CUMPA
 
-Actor Python de una ficha por ejecución, con Crawl4AI y Playwright, sin LLM ni servicios externos de extracción. Recibe una URL y guarda un único producto agregado compatible con el contrato 1688.
+Actor Python de una ficha por ejecución, con Crawl4AI y Playwright, sin LLM. Recibe una URL y guarda un único producto agregado compatible con el contrato 1688. Apify Proxy y Unblocker son transportes opcionales, desactivados por defecto.
 
 ## Uso en Apify Cloud
 
@@ -51,7 +51,7 @@ La navegación registra HTTP, redirecciones saneadas, CF-Ray disponible, formato
 
 Un 403 de reseñas es un error opcional: no descarta HTML comercial permitido y no se vuelve a solicitar ese recurso denegado durante el trabajo. No se extraen reseñas. Un 401/403 de fuentes imprescindibles o un desafío explícito detiene la adquisición. Una redirección a `/testchallengepage` produce `ACCESS_CHALLENGE` y no se sigue ni se resuelve automáticamente.
 
-No se activan proxies, stealth, modificaciones de identidad ni rotación de IP. El navegador conserva su identidad nativa y la automatización visible. Que el Actor compile o funcione localmente no garantiza permiso o acceso desde los servidores de Apify.
+El proxy solo se utiliza si se configura explícitamente y se declara autorización. No se implementan stealth, modificaciones de identidad ni rotación de IP desde el Actor. El navegador conserva su identidad nativa y la automatización visible. Que el Actor compile o funcione localmente no garantiza permiso o acceso desde los servidores de Apify.
 
 ## Ejecución local con F5 (Windows)
 
@@ -97,7 +97,7 @@ Los controles internos se mantienen en 30 s de adquisición, 4 MiB por documento
 El modo directo sigue siendo el predeterminado. Solo habilita proxy para una fuente y un acceso autorizados por el proveedor; marcar la declaración del input no concede ni verifica esos permisos.
 
 1. En [Apify Console → Proxy](https://console.apify.com/proxy), comprueba qué grupos tiene habilitados tu cuenta, países admitidos y condiciones/coste del plan. El selector de proxy del input permite elegir los grupos disponibles. Si no tienes acceso, gestiona el permiso correspondiente antes de ejecutar; el Actor no contrata servicios.
-2. En el input del Actor, habilita Apify Proxy, selecciona explícitamente un grupo ya disponible y, si corresponde, un país. Confirma **Autorización para usar proxy en esta fuente**. No se seleccionan automáticamente grupos, proxies residenciales ni países.
+2. En el input del Actor, habilita Apify Proxy y selecciona un grupo ya disponible: Datacenter, Residential o **Special → Unblocker**. Confirma **Autorización para usar proxy en esta fuente**. El Actor no fuerza un país si lo omites; Unblocker realiza su selección geográfica automática.
 3. Ejecuta una sola ficha. Revisa `[PROXY]`, `[HTTP]`, `[PARADA]` y `RUN_STATE.proxy`: `configured` solo significa que se configuró el transporte, no que Back Market permitió el acceso.
 4. Para deshabilitarlo, selecciona **Sin proxy** (`useApifyProxy: false`) o elimina `proxyConfiguration`; puedes dejar `proxyAccessAuthorized: false`. El programa no invoca el SDK de proxy en ese modo, aunque existan variables de proxy en el entorno.
 
@@ -115,7 +115,7 @@ Ejemplo de input residencial para una ejecución autorizada. Reemplaza el marcad
 }
 ```
 
-Para datacenter, sustituye `RESIDENTIAL` por el nombre exacto del grupo disponible en Console. No mezcles `RESIDENTIAL` con otros grupos; `UNBLOCKER` y `GOOGLE_SERP` quedan fuera del alcance de este Actor. También se admite `apifyProxyCountry` con dos letras mayúsculas; omitirlo no fuerza un país. No se admiten URLs de proxy personalizadas, credenciales en el input, listas de proxies, rotación ni fallback directo tras un error. La compatibilidad de formato se valida offline con SDK 4.2.0; los permisos efectivos requieren la inicialización real del SDK en tu ejecución autorizada. La visibilidad de un grupo en Console no acredita el acceso del proveedor al destino.
+Para datacenter, sustituye `RESIDENTIAL` por el nombre exacto del grupo disponible en Console. Para Unblocker, utiliza `"apifyProxyGroups": ["UNBLOCKER"]` y confirma autorización; el editor oficial lo muestra en **Special → Unblocker** cuando está disponible en tu cuenta. Tanto `RESIDENTIAL` como `UNBLOCKER` deben seleccionarse solos, sin mezclas y con esos nombres oficiales en mayúsculas. `GOOGLE_SERP` queda fuera del alcance. También se admite `apifyProxyCountry` con dos letras mayúsculas; para Unblocker se recomienda omitirlo salvo necesidad documentada. No se admiten URLs de proxy personalizadas, credenciales en el input ni fallback directo tras un error. La compatibilidad de formato se valida offline con SDK 4.2.0; los permisos efectivos requieren la inicialización real del SDK en tu ejecución autorizada. La visibilidad de un grupo en Console no acredita el acceso del proveedor al destino.
 
 Interpretación de `RUN_STATE.proxy` y los logs:
 
@@ -128,7 +128,11 @@ Interpretación de `RUN_STATE.proxy` y los logs:
 
 `null` significa que no se observó evidencia suficiente. Los fallos de autenticación/túnel sin respuesta del destino registran `connected: false`. El HTTP observado aparece en `documentHttpStatus` y el CF-Ray disponible se conserva en `RUN_STATE.acquisition.requests`/`accessChallenge`. No se añade una consulta externa de IP ni una petición extra para comprobar conectividad.
 
-La integración usa `Actor.create_proxy_configuration(actor_proxy_input=...)`, una sola `new_url(session_id=runId)` y `ProxyConfig.from_string()` en `CrawlerRunConfig`, como describe la [guía oficial](https://docs.apify.com/sdk/python/docs/guides/crawl4ai). Se reutiliza la sesión para todos los recursos de una única navegación. Apify controla la asignación de IP y su disponibilidad: una sesión no garantiza una IP permanente. El Actor no solicita otra sesión si hay un bloqueo.
+La integración usa `Actor.create_proxy_configuration(actor_proxy_input=...)`, una sola URL y `ProxyConfig.from_string()` en `CrawlerRunConfig`, como describe la [guía oficial](https://docs.apify.com/sdk/python/docs/guides/crawl4ai). Datacenter/Residential llaman a `new_url(session_id=runId)`; Unblocker llama a `new_url()` sin enviar ningún parámetro de sesión. En todos los modos el Actor conserva una sola navegación, `max_retries=0`, contexto temporal normal de navegador y cierre al terminar. No solicita otra sesión, otra IP ni otro transporte después de una denegación.
+
+`RUN_STATE.proxy.mode` distingue `direct`, `datacenter`, `residential` y `unblocker`. `sessionMode` es `single-run` para datacenter/residencial, `not-supported` para Unblocker y `null` sin proxy. Apify controla la asignación de IP: una nueva sesión puede recibir otra dirección y la afinidad residencial no garantiza una IP permanente. Unblocker no ofrece esa afinidad entre solicitudes, según su [documentación oficial](https://docs.apify.com/proxy/unblocker).
+
+Compatibilidad y límites de Unblocker: las clases y parámetros instalados (`AsyncWebCrawler`, `BrowserConfig`, `AsyncPlaywrightCrawlerStrategy`, `ProxyConfig` y `CrawlerRunConfig`) se comprobaron offline. La selección de configuración headless Linux se simuló sin arrancar Chromium. No se cambiaron TLS, huella, parser ni carga de recursos. Esto acredita el cableado, no la compatibilidad real de todas las respuestas de Back Market con el servicio. Cambios de IP entre documento, scripts y Fetch/XHR pueden afectar cookies, selección comercial y disponibilidad. Si el servicio entrega HTML en lugar de JSON, cambia el estado Nuxt o no carga alguna fuente, se mantienen validación de Content-Type/estructura y diagnóstico `partial`/error. Se conserva `HTTP_403`/`ACCESS_CHALLENGE`; no se añaden GET de recuperación, solver ni lógica de evasión. La validación TLS permanece activa; un fallo de certificados se diagnostica y no se deshabilita automáticamente.
 
 La inicialización oficial del SDK puede consultar la cuenta y comprobar acceso mediante el servicio de estado de Apify Proxy (en SDK 4.2.0, hasta dos intentos de conectividad de ese servicio). Esto es independiente de la única navegación a la ficha y no reintenta HTTP 403 ni desafíos del destino. El plazo de inicialización usa el mismo límite de adquisición, como presupuesto separado; con los valores actuales son hasta 30 s adicionales. En offline no se inicializa proxy ni se abre red.
 
@@ -136,6 +140,6 @@ El SDK toma la autenticación del entorno de Apify Cloud; no pegues tokens ni co
 
 `PROXY_CONFIGURATION_ERROR` detiene antes de abrir la ficha; `PROXY_AUTH_ERROR` y `PROXY_CONNECTION_ERROR` clasifican errores reconocibles de autenticación/túnel, tanto excepciones como `error_message` encapsulado por Crawl4AI. Los fallos sin una señal reconocible conservan `NAVIGATION_ERROR`. No se imprime el contenido privado del error. Se mantienen `HTTP_403` y `ACCESS_CHALLENGE` ante denegaciones imprescindibles. No se convierte automáticamente un bloqueo anterior en una prueba con proxy.
 
-Revisa [Proxy management del SDK](https://docs.apify.com/sdk/python/docs/concepts/proxy-management) y los [costes y requisitos vigentes](https://docs.apify.com/proxy). Los límites de tiempo/memoria/tamaño no equivalen a un presupuesto monetario ni limitan el tráfico total: residencial se cobra por tráfico, incluidos recursos del navegador. No se bloquean recursos adicionales para ahorrar tráfico ni se contratan servicios automáticamente. La validación de esta versión no ha activado ni probado servicios reales.
+Revisa [Proxy management del SDK](https://docs.apify.com/sdk/python/docs/concepts/proxy-management) y los [costes y requisitos vigentes](https://docs.apify.com/proxy). Los límites de tiempo/memoria/tamaño no equivalen a un presupuesto monetario ni limitan el tráfico total: residencial se cobra por tráfico y Unblocker por solicitudes exitosas según las unidades/condiciones del servicio. Una navegación puede cargar muchos recursos y generar múltiples cargos. El procesamiento interno de Unblocker depende de Apify; el Actor no añade reintentos. No se bloquean recursos adicionales para ahorrar tráfico ni se contratan servicios automáticamente. La validación de esta versión no ha activado ni probado servicios reales.
 
 Ver [CLOUD_PREPARATION.md](CLOUD_PREPARATION.md) para el alcance verificado y lo pendiente.

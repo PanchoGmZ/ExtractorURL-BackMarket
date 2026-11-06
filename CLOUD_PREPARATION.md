@@ -2,7 +2,21 @@
 
 Fecha: 6 de noviembre de 2026.
 
-## Revisión final: integración opcional de Apify Proxy
+## Actualización: Unblocker opcional
+
+Se conserva la integración oficial ya publicada en `fc34608101a527ad7324c0b5127a1cfa8daa4c8d`. `ProxySettings.mode` distingue transporte directo, datacenter, residencial y Unblocker. `split_proxy_input()` permite `UNBLOCKER` solo y en mayúsculas, exige la declaración de autorización y rechaza mezclas, grupos SERP y credenciales personalizadas. No cambia el estado desactivado por defecto.
+
+`configure_proxy()` pasa `actor_proxy_input` al SDK y llama una sola vez a `new_url()` sin argumentos para Unblocker. Datacenter/Residential conservan `new_url(session_id=runId)`. El objeto de `ProxyConfig.from_string()` continúa llegando a `CrawlerRunConfig(proxy_config=...)` mediante `acquire()`; no se añade otra arquitectura de navegador. `RUN_STATE.proxy` y los logs incluyen modo y `sessionMode=not-supported` para Unblocker. Se conserva la sesión/contexto temporal del navegador, sin afinidad de IP ni cookies personales. Una nueva sesión residencial puede recibir otra IP; toda asignación depende de Apify.
+
+Compatibilidad verificada offline con Apify SDK 4.2.0, Crawl4AI 0.9.5 y Playwright 1.64.1: generación local de URL, conversión de credenciales, parámetros de ejecución y construcción de `AsyncWebCrawler`/`AsyncPlaywrightCrawlerStrategy`. La selección headless Linux se simuló en Windows; no se arrancó Chromium ni se probó una conexión real. No se modifican BrowserConfig/TLS, Dockerfile, dependencias, parser comercial, precio, peso ni esquemas de Dataset/Output. El contrato conserva once campos y un único agregado.
+
+Validación de esta actualización: 14 tests del módulo, 5 casos focalizados de ciclo del Actor y 4 casos de política HTTP, todos offline y aprobados. Incluyen ausencia exacta de argumentos en `new_url()` para Unblocker, sesión residencial, modo directo, autorización, mezclas rechazadas, privacidad, fallos sin reintento y un único registro agregado con dobles del navegador/SDK. Sintaxis/JSON y cuatro esquemas Apify válidos. No se ejecutaron navegación, inicialización de acceso a un proxy real, instalaciones, compras ni despliegue Apify.
+
+La [documentación de Unblocker](https://docs.apify.com/proxy/unblocker) confirma ausencia de sesiones de IP y coste por solicitudes exitosas. Una página puede cargar muchos recursos: una navegación no implica un único cargo. No hay presupuesto monetario implementado ni nuevos bloqueos de recursos. El procesamiento interno del servicio es responsabilidad de Apify; el Actor mantiene cero reintentos y detención ante `HTTP_403`/`ACCESS_CHALLENGE`.
+
+Pendiente de la prueba autorizada del usuario en Cloud: permisos efectivos para Unblocker, build actualizado, autenticación/conexión, certificados y coherencia de documento/scripts/Fetch/XHR sin IP persistente. No se garantiza que Nuxt y las tres fuentes comerciales se reciban completas: respuestas no JSON, cambios de selección o datos ausentes conservan sus diagnósticos y estado parcial/error. No se hace fallback a Residential ni se recuperan endpoints bloqueados. En Console: actualizar desde `main`, elegir Proxy → Special → Unblocker y confirmar autorización aplicable; consultar estado, HTTP y CF-Ray sin confundir `configured` con extracción exitosa. Detalles de input y costes en [README.md](README.md#apify-proxy-opcional).
+
+## Histórico: integración opcional de Apify Proxy previa a Unblocker
 
 Estado actual comunicado por el usuario: el Actor ya construyó y ejecutó Chromium en Apify Cloud; la primera navegación recibió HTTP 403 en el documento principal. Esta revisión no ha realizado nuevas pruebas de acceso. Las limitaciones de build descritas más abajo corresponden a la preparación inicial.
 

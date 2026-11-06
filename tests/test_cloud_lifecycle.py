@@ -141,6 +141,29 @@ class CloudLifecycleTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(state['proxy']['status'], 'error')
         self.assertNotIn('synthetic-password', json.dumps(self.actor.values))
 
+    async def test_unblocker_omits_session_and_saves_one_aggregate(self):
+        self.actor.input.update(proxyConfiguration={'useApifyProxy': True, 'apifyProxyGroups': ['UNBLOCKER']},
+                                proxyAccessAuthorized=True)
+        sdk_proxy = SimpleNamespace(new_url=AsyncMock(
+            return_value='http://groups-UNBLOCKER:synthetic-password@proxy.invalid:8000'))
+        self.actor.create_proxy_configuration = AsyncMock(return_value=sdk_proxy)
+        html = '<html><script type="application/json">' + json.dumps(
+            {'productId': self.case.input['productId'], 'data': self.case.data}) + '</script></html>'
+        acquire = AsyncMock(return_value=(html, {}, {'status': 'received',
+            'requests': [{'category': 'document', 'httpStatus': 200}]}))
+        with self.context(acquire):
+            await entry.run()
+        sdk_proxy.new_url.assert_awaited_once_with()
+        acquire.assert_awaited_once()
+        self.assertEqual(acquire.await_args.kwargs['proxy_config'].username, 'groups-UNBLOCKER')
+        self.assertEqual(len(self.actor.records), 1)
+        self.assertEqual(len(self.actor.records[0]), 11)
+        state = self.actor.values['RUN_STATE']
+        self.assertEqual(state['proxy']['mode'], 'unblocker')
+        self.assertEqual(state['proxy']['sessionMode'], 'not-supported')
+        self.assertEqual(state['status'], 'success')
+        self.assertNotIn('synthetic-password', json.dumps(self.actor.values))
+
     async def test_abort_finishes_work_before_sdk_exit(self):
         entered = asyncio.Event()
         cleaned_up = False

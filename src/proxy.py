@@ -14,10 +14,19 @@ class ProxySettings:
     groups: tuple[str, ...] = ()
     country: str | None = None
 
+    @property
+    def mode(self):
+        if not self.enabled:
+            return 'direct'
+        if self.groups == ('UNBLOCKER',):
+            return 'unblocker'
+        return 'residential' if self.groups == ('RESIDENTIAL',) else 'datacenter'
+
     def diagnostic(self, status):
         return {'enabled': self.enabled, 'provider': 'apify' if self.enabled else None,
-                'groups': list(self.groups), 'country': self.country,
-                'sessionMode': 'single-run' if self.enabled else None, 'status': status,
+                'mode': self.mode, 'groups': list(self.groups), 'country': self.country,
+                'sessionMode': ('not-supported' if self.mode == 'unblocker' else 'single-run') if self.enabled else None,
+                'status': status,
                 'connected': None, 'documentHttpStatus': None, 'documentRequestSucceeded': None}
 
 
@@ -51,15 +60,16 @@ def split_proxy_input(raw):
         raise ValueError('Para habilitar proxy confirma proxyAccessAuthorized y los permisos del proveedor')
     if enabled and not groups:
         raise ValueError('Selecciona explícitamente un grupo Apify Proxy disponible; no se usa selección automática')
-    if enabled and any(group.upper() in {'UNBLOCKER', 'GOOGLE_SERP'} for group in groups):
-        raise ValueError('Solo se admiten grupos de datacenter o RESIDENTIAL; no servicios de desbloqueo ni SERP')
-    if enabled and 'RESIDENTIAL' in groups and groups != ['RESIDENTIAL']:
-        raise ValueError('Selecciona RESIDENTIAL sin mezclarlo con otros grupos')
+    if enabled and any(group.upper() == 'GOOGLE_SERP' for group in groups):
+        raise ValueError('GOOGLE_SERP no es compatible con este extractor de productos')
+    for special in ('RESIDENTIAL', 'UNBLOCKER'):
+        if enabled and any(group.upper() == special for group in groups) and groups != [special]:
+            raise ValueError(f'Selecciona {special} solo y con su nombre oficial en mayúsculas')
     return product_input, ProxySettings(enabled, tuple(groups) if enabled else (), country if enabled else None)
 
 
 async def configure_proxy(actor, settings, *, session_id, timeout_seconds):
-    """One SDK setup and one session URL; no destination requests or fallback."""
+    """One SDK setup and URL; Unblocker has no IP session. No fallback."""
     if not settings.enabled:
         return None
     try:
@@ -70,8 +80,11 @@ async def configure_proxy(actor, settings, *, session_id, timeout_seconds):
             })
             if configuration is None:
                 raise ProxyConfigurationError('El SDK no devolvió una configuración Apify Proxy')
-            # Use the same session for every resource of this single navigation.
-            proxy_url = await configuration.new_url(session_id=session_id)
+            if settings.mode == 'unblocker':
+                # UNBLOCKER explicitly does not support the proxy session parameter.
+                proxy_url = await configuration.new_url()
+            else:
+                proxy_url = await configuration.new_url(session_id=session_id)
             if not isinstance(proxy_url, str) or not proxy_url:
                 raise ProxyConfigurationError('El SDK no devolvió una URL Apify Proxy')
             from crawl4ai import ProxyConfig

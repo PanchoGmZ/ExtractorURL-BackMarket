@@ -69,9 +69,10 @@
             "properties": {
               "enabled": {"type": "boolean"},
               "provider": {"type": ["string", "null"], "enum": ["apify", null]},
+              "mode": {"type": "string", "enum": ["direct", "datacenter", "residential", "unblocker"]},
               "groups": {"type": "array", "items": {"type": "string"}},
               "country": {"type": ["string", "null"]},
-              "sessionMode": {"type": ["string", "null"], "enum": ["single-run", null]},
+              "sessionMode": {"type": ["string", "null"], "enum": ["single-run", "not-supported", null]},
               "status": {"type": "string", "enum": ["disabled", "pending", "initializing", "configured", "error", "not-used-offline"]},
               "connected": {"type": ["boolean", "null"], "description": "True: respuesta HTTP del documento observada por el navegador, excepto 407. No verifica IP ni éxito comercial. Null: no observado."},
               "documentHttpStatus": {"type": ["integer", "null"]},

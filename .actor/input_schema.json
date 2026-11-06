@@ -27,7 +27,7 @@
       "sectionCaption": "Proxy opcional — solo acceso autorizado",
       "title": "Apify Proxy (opcional)",
       "type": "object",
-      "description": "Desactivado por defecto. Selecciona explícitamente un grupo disponible en tu cuenta y confirma autorización. No se admiten proxies personalizados. Sin rotación ni reintentos ante bloqueos; puede generar cargos según tu plan.",
+      "description": "Desactivado por defecto. Selecciona un grupo disponible: Datacenter, RESIDENTIAL o Special → Unblocker (UNBLOCKER), y confirma autorización. UNBLOCKER se usa solo, sin sesión de IP y puede cobrar por solicitudes/recursos. No se admiten proxies personalizados ni reintentos ante bloqueos.",
       "editor": "proxy",
       "default": {"useApifyProxy": false}
     },

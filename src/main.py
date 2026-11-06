@@ -164,8 +164,11 @@ async def run(input_path=None):
                 if proxy_settings.enabled:
                     state['stage'] = 'proxy-setup'
                     state['proxy'] = proxy_settings.diagnostic('initializing')
-                    event('PROXY', 'Configurando Apify Proxy autorizado | grupos=%s | país=%s | sesión única; sin rotación ni reintentos.',
-                          ', '.join(proxy_settings.groups), proxy_settings.country or '(sin filtro)')
+                    event('PROXY', 'Configurando Apify Proxy autorizado | modo=%s | grupos=%s | país=%s | sesión IP=%s; una navegación y sin reintentos.',
+                          proxy_settings.mode, ', '.join(proxy_settings.groups), proxy_settings.country or '(sin filtro)',
+                          state['proxy']['sessionMode'])
+                    if proxy_settings.mode == 'unblocker':
+                        event('PROXY', 'UNBLOCKER no fija IP entre recursos. Conserva contexto de navegador; puede generar cargos por múltiples solicitudes.')
                     try:
                         proxy_config = await configure_proxy(actor, proxy_settings, session_id=state['runId'],
                                                              timeout_seconds=data['timeoutSeconds'])
