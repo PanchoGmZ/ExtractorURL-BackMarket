@@ -182,6 +182,32 @@ class AcquisitionDiagnosticTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(report['status'], 'blocked')
         self.assertEqual(report['error']['code'], 'HTTP_403')
 
+    async def test_main_document_http_502_is_acquisition_error_not_secondary_resource(self):
+        hooks, handlers, frame = {}, {}, object()
+        page = SimpleNamespace(main_frame=frame,
+            evaluate=AsyncMock(return_value={'webdriver': True, 'userAgent': 'test-browser'}),
+            route=AsyncMock(), on=lambda name, callback: handlers.update({name: callback}))
+
+        async def arun(*_, **__):
+            await hooks['before_goto'](page)
+            handlers['response'](SimpleNamespace(url=self.data()['url'], status=502, frame=frame,
+                headers={'content-type': 'text/html'},
+                request=SimpleNamespace(is_navigation_request=lambda: True)))
+            return SimpleNamespace(success=False, status_code=502, error_message='HTTP 502', html='')
+
+        crawler = SimpleNamespace(logger=private_proxy_logger(), start=AsyncMock(), close=AsyncMock(),
+            crawler_strategy=SimpleNamespace(set_hook=lambda name, callback: hooks.update({name: callback})),
+            arun=AsyncMock(side_effect=arun))
+        with patch('src.browser.make_crawler', return_value=crawler), \
+                patch('src.browser.memory_mb', return_value=(10, 20)), patch('src.browser.event') as log:
+            _, _, report = await acquire(self.data(), proxy_config=ProxyConfig.from_string(
+                'http://groups-UNBLOCKER:PRIVATE_PASSWORD@proxy.invalid:8000'), proxy_mode='unblocker')
+        self.assertEqual(report['status'], 'error')
+        self.assertEqual(report['error']['code'], 'HTTP_502')
+        self.assertEqual(report['documentError'], {'httpStatus': 502, 'code': 'HTTP_502', 'stage': 'navigation'})
+        self.assertEqual(report['resourceErrors'], [])
+        self.assertNotIn('RECURSO_SECUNDARIO', [call.args[0] for call in log.call_args_list])
+
     async def test_raised_exception_uses_same_safe_classification(self):
         report = await self.simulated(None, None,
             raised=RuntimeError('Page.goto: ERR_CERT_AUTHORITY_INVALID password=PRIVATE_PASSWORD'))

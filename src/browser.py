@@ -441,7 +441,12 @@ async def acquire(data, *, proxy_config=None, proxy_mode=None):
                       path, record['requestIds'].get('cf-ray', '(ausente)'))
                 if is_document and proxy_config is not None and response.status == 407:
                     fail('error', 'PROXY_AUTH_ERROR', 'El proxy rechazó la autenticación; no se reintenta.')
-                if response.status >= 400 and not reason and not (is_document and proxy_config is not None and response.status == 407):
+                elif is_document and response.status >= 400 and not reason:
+                    code = f'HTTP_{response.status}'
+                    report['documentError'] = {'httpStatus': response.status, 'code': code, 'stage': 'navigation'}
+                    event('ERROR_DOCUMENTO', 'Error de adquisición | HTTP=%s | etapa=navigation', response.status, level='error')
+                    fail('error', code, 'El documento principal respondió con error HTTP; no se reintenta.')
+                elif response.status >= 400 and not reason:
                     report['resourceErrors'].append(record.copy())
                     event('RECURSO_OPCIONAL' if category == 'optional' else 'RECURSO_SECUNDARIO',
                           'HTTP %s | categoría=%s | se conserva el documento comercial permitido.',
