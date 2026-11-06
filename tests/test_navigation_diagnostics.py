@@ -23,6 +23,7 @@ class NormalizationTests(unittest.TestCase):
             'Page.goto: net::ERR_PROXY_CONNECTION_FAILED': 'PROXY_CONNECTION_ERROR',
             'Page.goto: net::ERR_CERT_AUTHORITY_INVALID': 'TLS_ERROR',
             'Page.goto: net::ERR_PROXY_CERTIFICATE_INVALID': 'TLS_ERROR',
+            'Page.goto: net::ERR_QUIC_PROTOCOL_ERROR': 'CHROMIUM_ERR_QUIC_PROTOCOL_ERROR',
             'Browser.new_context: Browser does not support socks5 proxy authentication': 'PLAYWRIGHT_PROXY_UNSUPPORTED',
             "Browser.new_context: TypeError: got an unexpected keyword argument 'proxy'": 'PLAYWRIGHT_API_ERROR',
             'Page.goto: an unrecognized failure': 'PLAYWRIGHT_ERROR',
@@ -45,6 +46,10 @@ class NormalizationTests(unittest.TestCase):
         self.assertEqual(result['code'], 'NAVIGATION_ERROR_UNCLASSIFIED')
         self.assertTrue(result['errorMessagePresent'])
         self.assertNotIn('synthetic-unknown-detail', json.dumps(result))
+        proxy_http = navigation_failure('upstream error', http_status=593)
+        self.assertEqual(proxy_http['code'], 'APIFY_PROXY_HTTP_593')
+        self.assertEqual(proxy_http['failureType'], 'http')
+        self.assertEqual(proxy_http['httpStatus'], 593)
 
     def test_credentials_paths_and_code_context_never_reach_output(self):
         message = (
@@ -126,6 +131,51 @@ class AcquisitionDiagnosticTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(report['error']['code'], 'TLS_ERROR')
         self.assertEqual(report['navigationError']['source'], 'crawl4ai-logger')
         self.assertFalse(report['navigationError']['resultErrorMessagePresent'])
+
+    async def test_specific_logger_error_replaces_generic_playwright_result(self):
+        proxy = ProxyConfig.from_string('http://groups-UNBLOCKER:PRIVATE_PASSWORD@proxy.invalid:8000')
+        report = await self.simulated('Page.goto: an unrecognized failure', proxy,
+            logger_message='Page.goto: net::ERR_QUIC_PROTOCOL_ERROR password=PRIVATE_PASSWORD')
+        self.assertEqual(report['navigationError']['code'], 'CHROMIUM_ERR_QUIC_PROTOCOL_ERROR')
+        self.assertEqual(report['navigationError']['source'], 'crawl4ai-logger')
+        self.assertEqual(len(report['navigationError']['loggerErrors']), 1)
+        self.assertNotIn('PRIVATE_PASSWORD', json.dumps(report))
+
+    async def test_main_document_requestfailed_code_is_normalized_and_kept(self):
+        hooks = {}
+        handlers = {}
+        page = SimpleNamespace(main_frame=object(),
+            evaluate=AsyncMock(return_value={'webdriver': True, 'userAgent': 'test-browser'}),
+            route=AsyncMock(), on=lambda name, callback: handlers.update({name: callback}))
+
+        async def arun(*_, **__):
+            await hooks['before_goto'](page)
+            request = SimpleNamespace(is_navigation_request=lambda: True, frame=page.main_frame,
+                failure='net::ERR_QUIC_PROTOCOL_ERROR token=PRIVATE_TOKEN https://private:password@proxy.invalid')
+            handlers['requestfailed'](request)
+            return SimpleNamespace(success=False, status_code=None,
+                error_message='Page.goto: an unrecognized failure', html='')
+
+        crawler = SimpleNamespace(logger=private_proxy_logger(), start=AsyncMock(), close=AsyncMock(),
+            crawler_strategy=SimpleNamespace(set_hook=lambda name, callback: hooks.update({name: callback})),
+            arun=AsyncMock(side_effect=arun))
+        proxy = ProxyConfig.from_string('http://groups-UNBLOCKER:PRIVATE_PASSWORD@proxy.invalid:8000')
+        with patch('src.browser.make_crawler', return_value=crawler), \
+                patch('src.browser.memory_mb', return_value=(10, 20)), patch('src.browser.event'):
+            _, _, report = await acquire(self.data(), proxy_config=proxy, proxy_mode='unblocker')
+        self.assertEqual(report['navigationFailures'], [{
+            'failureType': 'navigation', 'source': 'playwright-requestfailed',
+            'chromiumErrorCode': 'ERR_QUIC_PROTOCOL_ERROR'}])
+        self.assertEqual(report['navigationError']['code'], 'CHROMIUM_ERR_QUIC_PROTOCOL_ERROR')
+        self.assertEqual(report['navigationError']['failureType'], 'navigation')
+        self.assertNotIn('PRIVATE_TOKEN', json.dumps(report))
+
+    async def test_apify_proxy_http_statuses_remain_http_diagnostics(self):
+        for status in range(590, 600):
+            report = await self.simulated('proxy upstream response', None, status=status)
+            self.assertEqual(report['navigationError']['code'], f'APIFY_PROXY_HTTP_{status}')
+            self.assertEqual(report['navigationError']['failureType'], 'http')
+            self.assertEqual(report['navigationError']['httpStatus'], status)
 
     async def test_actual_http_403_remains_blocked(self):
         report = await self.simulated('PRIVATE_TOKEN', None, status=403)

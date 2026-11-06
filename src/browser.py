@@ -11,7 +11,7 @@ import psutil
 from crawl4ai import AsyncWebCrawler, BrowserConfig, CacheMode, CrawlerRunConfig
 from crawl4ai.async_crawler_strategy import AsyncPlaywrightCrawlerStrategy
 from crawl4ai.browser_manager import BrowserManager
-from .diagnostics import event, navigation_failure
+from .diagnostics import chromium_error_code, event, navigation_failure
 from .urls import is_challenge_url, redirect_details, safe_url, selection_state
 
 
@@ -89,7 +89,7 @@ async def acquire(data, *, proxy_config=None, proxy_mode=None):
     report = {'status': 'running', 'url': safe_url(data['url']), 'navigationCount': 0,
         'directApiRequests': 0, 'requests': [], 'peakPrivateMb': 0, 'peakRssMb': 0,
         'nativeAutomationVisible': None, 'browserClosed': False, 'stage': 'browser-start',
-        'resourceErrors': [], 'optionalRequestsSuppressed': 0, 'redirects': []}
+        'resourceErrors': [], 'optionalRequestsSuppressed': 0, 'redirects': [], 'navigationFailures': []}
     responses, tasks = {}, set()
     denied_optional = set()
     stop = asyncio.Event()
@@ -113,20 +113,42 @@ async def acquire(data, *, proxy_config=None, proxy_mode=None):
         diagnosis = navigation_failure(message, http_status=http_status, source=source)
         result_message_present = diagnosis['errorMessagePresent'] if source == 'crawl-result' else None
         logger_errors = getattr(getattr(crawler, 'logger', None), 'safe_errors', [])
-        if diagnosis['category'] in ('unknown', 'crawl-wrapper'):
-            evidence = next((item for item in reversed(logger_errors)
-                             if item['category'] not in ('unknown', 'crawl-wrapper')), None)
-            if evidence is None and not diagnosis['errorMessagePresent']:
-                evidence = next((item for item in reversed(logger_errors) if item['errorMessagePresent']), None)
-            if evidence:
-                diagnosis = dict(evidence) | {'httpStatus': diagnosis['httpStatus']}
+        document_statuses = [item['httpStatus'] for item in report['requests']
+                             if item.get('category') == 'document' and type(item.get('httpStatus')) is int]
+        effective_http_status = http_status if type(http_status) is int else (document_statuses[-1] if document_statuses else None)
+        if effective_http_status != diagnosis['httpStatus']:
+            diagnosis = navigation_failure(message, http_status=effective_http_status, source=source)
+        generic_codes = {'PLAYWRIGHT_ERROR', 'CRAWL4AI_ERROR', 'NAVIGATION_ERROR_UNCLASSIFIED',
+                         'NAVIGATION_ERROR_NO_DETAILS'}
+        specific_logger = next((item for item in reversed(logger_errors)
+                                if item['code'] not in generic_codes and
+                                (item['signals'] or item['httpStatus'] is not None)), None)
+        request_failure = next((item for item in reversed(report['navigationFailures'])
+                                if item.get('chromiumErrorCode')), None)
+        if diagnosis['code'] in generic_codes:
+            if specific_logger:
+                diagnosis = dict(specific_logger) | {'httpStatus': effective_http_status}
+            elif request_failure:
+                diagnosis = navigation_failure('Page.goto: net::' + request_failure['chromiumErrorCode'],
+                                               http_status=effective_http_status,
+                                               source='playwright-requestfailed')
+        logger_summary = [{'code': item['code'], 'category': item['category'],
+                           'operation': item['operation'], 'signals': item['signals'],
+                           'exceptionType': item['exceptionType']} for item in logger_errors]
         diagnosis.update(stage=report['stage'], loggerErrorCount=len(logger_errors),
-                         resultErrorMessagePresent=result_message_present)
+                         resultErrorMessagePresent=result_message_present,
+                         loggerErrors=logger_summary,
+                         navigationFailures=report['navigationFailures'][-4:])
         report['navigationError'] = diagnosis
-        event('CAUSA_NAVEGACION', 'código=%s | categoría=%s | operación=%s | señales=%s | excepción=%s | fuente=%s | mensaje presente=%s | errores logger=%s',
+        event('CAUSA_NAVEGACION', 'tipo=%s | código=%s | categoría=%s | operación=%s | señales=%s | excepción=%s | fuente=%s | mensaje presente=%s | errores logger=%s',
+              diagnosis['failureType'],
               diagnosis['code'], diagnosis['category'], diagnosis['operation'],
               ','.join(diagnosis['signals']) or '(ninguna)', diagnosis['exceptionType'],
               diagnosis['source'], diagnosis['errorMessagePresent'], diagnosis['loggerErrorCount'], level='warning')
+        if logger_summary:
+            event('LOGGER_CAUSES', 'errores=%s | diagnósticos=%s', len(logger_summary),
+                  ';'.join(item['code'] + ':' + (','.join(item['signals']) or '(sin señal)')
+                           for item in logger_summary), level='warning')
         return diagnosis['code']
 
     def redirect(source, location, status, category, cf_ray=None):
@@ -206,6 +228,23 @@ async def acquire(data, *, proxy_config=None, proxy_mode=None):
         report['stage'] = 'navigation'
         event('NAVEGACION', 'Iniciando navegación %s/1 | ruta=%s | automatización visible=%s',
               report['navigationCount'], urlsplit(data['url']).path, report['nativeAutomationVisible'])
+
+        def on_request_failed(request):
+            try:
+                if not request.is_navigation_request() or request.frame != page.main_frame:
+                    return
+                failure = request.failure
+            except Exception:
+                return
+            code = chromium_error_code(failure)
+            record = {'failureType': 'navigation', 'source': 'playwright-requestfailed',
+                      'chromiumErrorCode': code}
+            report['navigationFailures'].append(record)
+            del report['navigationFailures'][:-4]
+            event('REQUEST_FAILED', 'documento principal | código=%s', code or 'NAVIGATION_REQUEST_FAILED',
+                  level='warning')
+
+        page.on('requestfailed', on_request_failed)
 
         async def route_navigation(route):
             request = route.request

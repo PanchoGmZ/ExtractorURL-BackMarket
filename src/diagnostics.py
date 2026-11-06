@@ -22,7 +22,9 @@ def navigation_failure(message, *, http_status=None, source='crawl-result'):
     # is ever emitted: only constants from the allow-lists below leave this function.
     text = re.sub(r'\b[a-zA-Z][a-zA-Z0-9+.-]*://[^\s\'"<>]+', '[URL]', text)
     text = re.sub(r'''(?i)\b(?:password|passwd|username|token|authorization|cookie|set-cookie)['"]?\s*[:=]\s*(?:"[^"]*"|'[^']*'|[^\s,;]+)''', '[PRIVATE]', text)
+    chromium_errors = list(dict.fromkeys(re.findall(r'(?<![A-Z0-9_])net::(ERR_[A-Z0-9_]+)\b', text)))
     signals = [signal for signal in known_signals if re.search(r'(?<![A-Z0-9_])' + signal + r'(?![A-Z0-9_])', text)]
+    signals.extend(signal for signal in chromium_errors if signal not in signals)
     operation = next((op for op in ('BrowserType.launch', 'Browser.new_context',
         'BrowserContext.new_page', 'BrowserContext.add_init_script', 'Page.goto', 'Page.evaluate') if op in text), None)
     exception_names = ('TypeError', 'AttributeError', 'ValueError', 'RuntimeError',
@@ -33,6 +35,8 @@ def navigation_failure(message, *, http_status=None, source='crawl-result'):
     code, category = 'NAVIGATION_ERROR_UNCLASSIFIED', 'unknown'
     if http_status == 403:
         code, category = 'HTTP_403', 'access'
+    elif type(http_status) is int and 590 <= http_status <= 599:
+        code, category = f'APIFY_PROXY_HTTP_{http_status}', 'proxy-http-response'
     elif (http_status == 407 or any(s in signals for s in ('ERR_PROXY_AUTH_REQUESTED', 'ERR_INVALID_AUTH_CREDENTIALS'))
           or re.search(r'\b407\b|proxy authentication (?:failed|required)|invalid proxy credentials', text, re.I)):
         code, category = 'PROXY_AUTH_ERROR', 'authentication'
@@ -57,6 +61,8 @@ def navigation_failure(message, *, http_status=None, source='crawl-result'):
         code, category = 'PLAYWRIGHT_API_ERROR', 'playwright-api'
     elif any(s in signals for s in ('ERR_NAME_NOT_RESOLVED', 'ERR_CONNECTION_REFUSED')):
         code, category = 'NETWORK_ERROR', 'network'
+    elif chromium_errors:
+        code, category = 'CHROMIUM_' + chromium_errors[-1], 'chromium-network'
     elif operation:
         code, category = 'PLAYWRIGHT_ERROR', 'playwright'
     elif wrapped or exception_type:
@@ -67,7 +73,15 @@ def navigation_failure(message, *, http_status=None, source='crawl-result'):
             'signals': signals, 'exceptionType': exception_type, 'crawl4aiWrapped': wrapped,
             'errorMessagePresent': present, 'rawMessageOmitted': True,
             'httpStatus': http_status if type(http_status) is int else None,
-            'source': source if source in ('crawl-result', 'exception', 'crawl4ai-logger') else 'unknown'}
+            'failureType': 'http' if type(http_status) is int else 'navigation',
+            'source': source if source in ('crawl-result', 'exception', 'crawl4ai-logger',
+                                           'playwright-requestfailed') else 'unknown'}
+
+
+def chromium_error_code(message):
+    """Return only a normalized Chromium ERR_* token from private Playwright text."""
+    diagnosis = navigation_failure(message, source='playwright-requestfailed')
+    return next((signal for signal in reversed(diagnosis['signals']) if signal.startswith('ERR_')), None)
 
 
 def event(stage, message, *args, level='info'):
@@ -75,6 +89,9 @@ def event(stage, message, *args, level='info'):
 
 
 def advice(code):
+    if code.startswith('APIFY_PROXY_HTTP_'):
+        event('RECOMENDACION', 'Apify Proxy devolvió el estado HTTP indicado; revisa navigationError.httpStatus y la ruta documentada por Apify.', level='warning')
+        return
     recommendations = {
         'PREVIOUS_ACCESS_BLOCK': (
             'Chrome no se abrió: la parada proviene de reports/access-blocked.json, no de un HTTP nuevo.',
