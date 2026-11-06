@@ -85,6 +85,8 @@ class CloudLifecycleTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.actor.values['RUN_STATE']['status'], 'success')
         self.assertEqual(self.actor.values['RUN_STATE']['savedResults'], 1)
         self.assertNotIn('INPUT', self.actor.values)
+        self.assertEqual(self.actor.values['RUN_STATE']['proxy']['status'], 'disabled')
+        self.assertEqual(acquire.await_args.kwargs, {})
 
     async def test_challenge_fails_without_a_product_or_stale_output(self):
         (self.root / 'output').mkdir()
@@ -98,6 +100,46 @@ class CloudLifecycleTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.actor.values['RUN_STATE']['status'], 'blocked')
         self.assertIsNone(self.actor.values['RUN_STATE']['outputFile'])
         self.assertFalse((self.root / 'output/product.json').exists())
+
+    async def test_proxy_passes_once_to_acquisition_and_saves_one_aggregate(self):
+        self.actor.input.update(proxyConfiguration={'useApifyProxy': True, 'apifyProxyGroups': ['TEST_GROUP']},
+                                proxyAccessAuthorized=True)
+        sdk_proxy = SimpleNamespace(new_url=AsyncMock(
+            return_value='http://test-user:synthetic-password@proxy.invalid:8000'))
+        self.actor.create_proxy_configuration = AsyncMock(return_value=sdk_proxy)
+        html = '<html><script type="application/json">' + json.dumps(
+            {'productId': self.case.input['productId'], 'data': self.case.data}) + '</script></html>'
+        acquire = AsyncMock(return_value=(html, {}, {'status': 'received',
+            'requests': [{'category': 'document', 'httpStatus': 200}]}))
+        with self.context(acquire):
+            await entry.run()
+        acquire.assert_awaited_once()
+        self.assertEqual(acquire.await_args.kwargs['proxy_config'].server, 'http://proxy.invalid:8000')
+        self.assertEqual(len(self.actor.records), 1)
+        self.assertEqual(len(self.actor.records[0]), 11)
+        state = self.actor.values['RUN_STATE']
+        self.assertEqual(state['status'], 'success')
+        self.assertEqual(state['proxy']['status'], 'configured')
+        self.assertTrue(state['proxy']['connected'])
+        self.assertTrue(state['proxy']['documentRequestSucceeded'])
+        sdk_proxy.new_url.assert_awaited_once_with(session_id=state['runId'])
+        self.assertNotIn('synthetic-password', json.dumps(self.actor.values))
+
+    async def test_proxy_setup_error_does_not_start_acquisition(self):
+        self.actor.input.update(proxyConfiguration={'useApifyProxy': True, 'apifyProxyGroups': ['TEST_GROUP']},
+                                proxyAccessAuthorized=True)
+        self.actor.create_proxy_configuration = AsyncMock(side_effect=RuntimeError('synthetic-password'))
+        acquire = AsyncMock()
+        with self.context(acquire):
+            await entry.run()
+        acquire.assert_not_awaited()
+        self.assertEqual(self.actor.records, [])
+        self.assertEqual(self.actor.exits, [1])
+        state = self.actor.values['RUN_STATE']
+        self.assertEqual(state['stage'], 'proxy-setup')
+        self.assertEqual(state['error']['code'], 'PROXY_CONFIGURATION_ERROR')
+        self.assertEqual(state['proxy']['status'], 'error')
+        self.assertNotIn('synthetic-password', json.dumps(self.actor.values))
 
     async def test_abort_finishes_work_before_sdk_exit(self):
         entered = asyncio.Event()

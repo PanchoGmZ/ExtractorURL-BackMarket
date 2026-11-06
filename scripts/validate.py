@@ -19,9 +19,11 @@ def main():
     for key in ('input', 'output'):
         assert (ROOT / '.actor' / actor[key]).is_file()
     input_schema = json.loads((ROOT / '.actor/input_schema.json').read_text(encoding='utf-8'))
-    assert set(input_schema['properties']) == {'url', 'outputFormat'}
+    assert set(input_schema['properties']) == {'url', 'outputFormat', 'proxyConfiguration', 'proxyAccessAuthorized'}
     assert input_schema['required'] == ['url']
     assert input_schema['properties']['outputFormat']['default'] == 'reference1688'
+    assert input_schema['properties']['proxyConfiguration']['default'] == {'useApifyProxy': False}
+    assert input_schema['properties']['proxyAccessAuthorized']['default'] is False
     dataset = json.loads((ROOT / '.actor/dataset_schema.json').read_text(encoding='utf-8'))
     fields = ['url', 'title', 'price', 'productLadderPrices', 'moq', 'weight', 'dimensions',
               'images', 'characteristics', 'variations', 'productId']
@@ -59,7 +61,7 @@ def main():
         print(stream.getvalue())
         raise SystemExit(1)
     print(json.dumps({'validation': 'passed', 'offlineTests': result.testsRun,
-        'inputFields': ['url', 'outputFormat'], 'datasetFields': len(fields),
+        'inputFields': list(input_schema['properties']), 'datasetFields': len(fields),
         'coreVersions': pins, 'networkRequests': 0, 'browserLaunched': False,
         'dockerBuild': 'separate verification required', 'apifyCloudRun': 'not performed'}, indent=2))
 

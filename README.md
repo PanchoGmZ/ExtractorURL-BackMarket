@@ -4,10 +4,12 @@ Actor Python de una ficha por ejecución, con Crawl4AI y Playwright, sin LLM ni 
 
 ## Uso en Apify Cloud
 
-Conecta este repositorio desde Apify Console, rama `main`, usando el `Dockerfile` de la raíz. El formulario muestra solamente:
+Conecta este repositorio desde Apify Console, rama `main`, usando el `Dockerfile` de la raíz. Los campos principales del formulario son:
 
 - **URL del producto**, obligatoria.
 - **Formato de salida**, `reference1688` predeterminado.
+
+Una sección adicional permite configurar Apify Proxy de forma opcional. Está desactivado por defecto.
 
 Se admiten fichas HTTPS de `www.backmarket.com/en-us/p/slug/UUID` y los parámetros comerciales `l` y `offerType`, sin duplicados. No se resuelven enlaces abreviados ni se inventan identificadores. Los demás parámetros se rechazan explícitamente.
 
@@ -90,10 +92,50 @@ No requieren capturas privadas, cuenta Apify ni navegación. Incluyen casos sint
 
 Los controles internos se mantienen en 30 s de adquisición, 4 MiB por documento/JSON y 1024 MiB privados de Python e hijos. Se pueden ajustar externamente con `BACKMARKET_TIMEOUT_SECONDS`, `BACKMARKET_MAX_HTML_BYTES` y `BACKMARKET_MAX_MEMORY_MB`. El cierre tiene un presupuesto adicional acotado; la memoria se muestrea y no es una cuota dura del SO.
 
-## Proxy opcional futuro
+## Apify Proxy opcional
 
-Actualmente desactivado y sin campo en el formulario. Una integración autorizada podría usar `Actor.create_proxy_configuration()`, una URL del SDK y `ProxyConfig.from_string(...)` en `CrawlerRunConfig`, según la [guía oficial](https://docs.apify.com/sdk/python/docs/guides/crawl4ai).
+El modo directo sigue siendo el predeterminado. Solo habilita proxy para una fuente y un acceso autorizados por el proveedor; marcar la declaración del input no concede ni verifica esos permisos.
 
-Requiere permisos del proveedor, autenticación y acceso al grupo contratado, presupuesto y revisión de [costes vigentes](https://docs.apify.com/proxy). No se utiliza como respuesta automática a un bloqueo ni se habilita rotación en esta versión.
+1. En [Apify Console → Proxy](https://console.apify.com/proxy), comprueba qué grupos tiene habilitados tu cuenta, países admitidos y condiciones/coste del plan. El selector de proxy del input permite elegir los grupos disponibles. Si no tienes acceso, gestiona el permiso correspondiente antes de ejecutar; el Actor no contrata servicios.
+2. En el input del Actor, habilita Apify Proxy, selecciona explícitamente un grupo ya disponible y, si corresponde, un país. Confirma **Autorización para usar proxy en esta fuente**. No se seleccionan automáticamente grupos, proxies residenciales ni países.
+3. Ejecuta una sola ficha. Revisa `[PROXY]`, `[HTTP]`, `[PARADA]` y `RUN_STATE.proxy`: `configured` solo significa que se configuró el transporte, no que Back Market permitió el acceso.
+4. Para deshabilitarlo, selecciona **Sin proxy** (`useApifyProxy: false`) o elimina `proxyConfiguration`; puedes dejar `proxyAccessAuthorized: false`. El programa no invoca el SDK de proxy en ese modo, aunque existan variables de proxy en el entorno.
+
+Ejemplo de input residencial para una ejecución autorizada. Reemplaza el marcador de URL por una ficha válida; el grupo oficial es `RESIDENTIAL` y debe estar habilitado en tu cuenta:
+
+```json
+{
+  "url": "PEGA_AQUI_LA_URL_HTTPS_DEL_PRODUCTO",
+  "outputFormat": "reference1688",
+  "proxyConfiguration": {
+    "useApifyProxy": true,
+    "apifyProxyGroups": ["RESIDENTIAL"]
+  },
+  "proxyAccessAuthorized": true
+}
+```
+
+Para datacenter, sustituye `RESIDENTIAL` por el nombre exacto del grupo disponible en Console. No mezcles `RESIDENTIAL` con otros grupos; `UNBLOCKER` y `GOOGLE_SERP` quedan fuera del alcance de este Actor. También se admite `apifyProxyCountry` con dos letras mayúsculas; omitirlo no fuerza un país. No se admiten URLs de proxy personalizadas, credenciales en el input, listas de proxies, rotación ni fallback directo tras un error. La compatibilidad de formato se valida offline con SDK 4.2.0; los permisos efectivos requieren la inicialización real del SDK en tu ejecución autorizada. La visibilidad de un grupo en Console no acredita el acceso del proveedor al destino.
+
+Interpretación de `RUN_STATE.proxy` y los logs:
+
+| Indicador | Evidencia | Lo que no acredita |
+|---|---|---|
+| `status: configured` | El SDK produjo una configuración y se convirtió a `ProxyConfig`. | Conexión, IP asignada o permiso de Back Market. La comprobación interna del SDK puede advertir timeout sin fallar. |
+| `connected: true` | El navegador observó una respuesta HTTP del documento, distinta de 407, usando la configuración de proxy. | IP concreta, acceso comercial o extracción completa. Un HTTP 403 también acredita respuesta y detiene el trabajo. |
+| `documentRequestSucceeded: true` | El documento respondió HTTP 200 y no se detectó desafío. | Que título, precio, imágenes y variantes estén completos/verificados. |
+| `RUN_STATE.status: success` | El extractor terminó sin campos esenciales pendientes y guardó un agregado. | Acceso futuro a otras fichas. |
+
+`null` significa que no se observó evidencia suficiente. Los fallos de autenticación/túnel sin respuesta del destino registran `connected: false`. El HTTP observado aparece en `documentHttpStatus` y el CF-Ray disponible se conserva en `RUN_STATE.acquisition.requests`/`accessChallenge`. No se añade una consulta externa de IP ni una petición extra para comprobar conectividad.
+
+La integración usa `Actor.create_proxy_configuration(actor_proxy_input=...)`, una sola `new_url(session_id=runId)` y `ProxyConfig.from_string()` en `CrawlerRunConfig`, como describe la [guía oficial](https://docs.apify.com/sdk/python/docs/guides/crawl4ai). Se reutiliza la sesión para todos los recursos de una única navegación. Apify controla la asignación de IP y su disponibilidad: una sesión no garantiza una IP permanente. El Actor no solicita otra sesión si hay un bloqueo.
+
+La inicialización oficial del SDK puede consultar la cuenta y comprobar acceso mediante el servicio de estado de Apify Proxy (en SDK 4.2.0, hasta dos intentos de conectividad de ese servicio). Esto es independiente de la única navegación a la ficha y no reintenta HTTP 403 ni desafíos del destino. El plazo de inicialización usa el mismo límite de adquisición, como presupuesto separado; con los valores actuales son hasta 30 s adicionales. En offline no se inicializa proxy ni se abre red.
+
+El SDK toma la autenticación del entorno de Apify Cloud; no pegues tokens ni contraseñas en el input o el repositorio. Los logs propios solo muestran estado, grupo, país y observaciones HTTP seguras. Con proxy se suprimen los logs internos crudos mediante la interfaz pública `AsyncLoggerBase` de Crawl4AI, sin sustituir métodos privados como `_log`; se conservan los diagnósticos propios de etapa, HTTP, CF-Ray y cierre.
+
+`PROXY_CONFIGURATION_ERROR` detiene antes de abrir la ficha; `PROXY_AUTH_ERROR` y `PROXY_CONNECTION_ERROR` clasifican errores reconocibles de autenticación/túnel, tanto excepciones como `error_message` encapsulado por Crawl4AI. Los fallos sin una señal reconocible conservan `NAVIGATION_ERROR`. No se imprime el contenido privado del error. Se mantienen `HTTP_403` y `ACCESS_CHALLENGE` ante denegaciones imprescindibles. No se convierte automáticamente un bloqueo anterior en una prueba con proxy.
+
+Revisa [Proxy management del SDK](https://docs.apify.com/sdk/python/docs/concepts/proxy-management) y los [costes y requisitos vigentes](https://docs.apify.com/proxy). Los límites de tiempo/memoria/tamaño no equivalen a un presupuesto monetario ni limitan el tráfico total: residencial se cobra por tráfico, incluidos recursos del navegador. No se bloquean recursos adicionales para ahorrar tráfico ni se contratan servicios automáticamente. La validación de esta versión no ha activado ni probado servicios reales.
 
 Ver [CLOUD_PREPARATION.md](CLOUD_PREPARATION.md) para el alcance verificado y lo pendiente.

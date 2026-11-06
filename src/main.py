@@ -15,6 +15,7 @@ from jsonschema import Draft7Validator, FormatChecker
 from .extract import extract_html, parse_input
 from .diagnostics import advice, event
 from .urls import selection_parameters
+from .proxy import ProxyConfigurationError, configure_proxy, proxy_observation, split_proxy_input
 
 
 def save(path, data):
@@ -106,7 +107,9 @@ async def run(input_path=None):
                 await actor.set_value(actor.configuration.input_key, raw)
             else:
                 event('INPUT', 'Leyendo entrada con Actor.get_input().')
-            data = parse_input(await actor.get_input())
+            product_input, proxy_settings = split_proxy_input(await actor.get_input())
+            data = parse_input(product_input)
+            state['proxy'] = proxy_settings.diagnostic('pending' if proxy_settings.enabled else 'disabled')
             state.update(url=data['url'], productId=data['productId'], executionMode=data['executionMode'])
             metadata.update(productId=data['productId'], url=data['url'])
             event('INPUT', 'Válido | modo=%s | UUID=%s', data['executionMode'], data['productId'])
@@ -116,6 +119,7 @@ async def run(input_path=None):
                   data['timeoutSeconds'], data['maxHtmlBytes'], data['maxHtmlBytes'] / 1048576, data['maxMemoryMb'])
             event('LIMITES', 'Una navegación, concurrencia=1. Cierre adicional: hasta 5 s más espera de tareas de 2 s.')
             if data['executionMode'] == 'offline':
+                state['proxy'] = proxy_settings.diagnostic('not-used-offline')
                 state['stage'] = 'offline-read'
                 path = local_path(data['htmlFile'])
                 event('OFFLINE', 'Leyendo %s | no se abrirá navegador ni se consultará la red.', data['htmlFile'])
@@ -156,11 +160,34 @@ async def run(input_path=None):
                     state.update(status='blocked', error={'code': 'PREVIOUS_ACCESS_BLOCK',
                         'message': 'Existe una parada previa documentada. Revisar el diagnóstico antes de otra navegación.'})
                     raise RuntimeError('Acceso bloqueado anteriormente; ver reports/access-blocked.json')
+                proxy_config = None
+                if proxy_settings.enabled:
+                    state['stage'] = 'proxy-setup'
+                    state['proxy'] = proxy_settings.diagnostic('initializing')
+                    event('PROXY', 'Configurando Apify Proxy autorizado | grupos=%s | país=%s | sesión única; sin rotación ni reintentos.',
+                          ', '.join(proxy_settings.groups), proxy_settings.country or '(sin filtro)')
+                    try:
+                        proxy_config = await configure_proxy(actor, proxy_settings, session_id=state['runId'],
+                                                             timeout_seconds=data['timeoutSeconds'])
+                    except ProxyConfigurationError:
+                        state['proxy'] = proxy_settings.diagnostic('error')
+                        raise
+                    state['proxy'] = proxy_settings.diagnostic('configured')
+                    event('PROXY', 'Estado=configured | conexión y petición todavía no verificadas.')
+                else:
+                    event('PROXY', 'Desactivado; se conserva la conexión directa.')
                 state['stage'] = 'acquisition'
                 event('NAVEGADOR', 'Cargando Crawl4AI desde el entorno Python del proyecto.')
                 from .browser import acquire
-                document, responses, acquisition = await acquire(data)
+                if proxy_config is None:
+                    document, responses, acquisition = await acquire(data)
+                else:
+                    document, responses, acquisition = await acquire(data, proxy_config=proxy_config)
                 state['acquisition'] = acquisition
+                if proxy_config is not None:
+                    state['proxy'].update(proxy_observation(acquisition))
+                    event('PROXY', 'Estado=configured | connected=%s | HTTP documento=%s | petición correcta=%s; no acredita extracción completa.',
+                          state['proxy']['connected'], state['proxy']['documentHttpStatus'], state['proxy']['documentRequestSucceeded'])
                 if acquisition['status'] != 'received':
                     state['stage'] = 'acquisition.' + acquisition.get('failureStage', 'unknown')
                     state.update(status=acquisition['status'], error=acquisition.get('error'))
@@ -258,7 +285,8 @@ async def run(input_path=None):
             exit_code = 143
         except Exception as error:
             if state['status'] in ('running', 'success') or state['stage'] == 'storage':
-                code = 'INVALID_INPUT' if state['stage'] == 'input' else type(error).__name__
+                code = ('INVALID_INPUT' if state['stage'] == 'input' else
+                        'PROXY_CONFIGURATION_ERROR' if isinstance(error, ProxyConfigurationError) else type(error).__name__)
                 state.update(status='error', error={'code': code, 'message': str(error)[:500]})
             failure = state.get('error') or {'code': type(error).__name__, 'message': str(error)[:500]}
             event('FALLO', 'etapa=%s | código=%s | %s', state['stage'], failure['code'], failure['message'], level='error')

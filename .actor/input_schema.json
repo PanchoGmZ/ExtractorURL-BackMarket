@@ -22,6 +22,20 @@
         "reference1688"
       ],
       "default": "reference1688"
+    },
+    "proxyConfiguration": {
+      "sectionCaption": "Proxy opcional — solo acceso autorizado",
+      "title": "Apify Proxy (opcional)",
+      "type": "object",
+      "description": "Desactivado por defecto. Selecciona explícitamente un grupo disponible en tu cuenta y confirma autorización. No se admiten proxies personalizados. Sin rotación ni reintentos ante bloqueos; puede generar cargos según tu plan.",
+      "editor": "proxy",
+      "default": {"useApifyProxy": false}
+    },
+    "proxyAccessAuthorized": {
+      "title": "Confirmo autorización para usar proxy en esta fuente",
+      "type": "boolean",
+      "description": "Confirma los permisos del proveedor, acceso al grupo seleccionado y presupuesto antes de habilitar Apify Proxy. Esta declaración no comprueba ni concede permisos externos.",
+      "default": false
     }
   }
 }

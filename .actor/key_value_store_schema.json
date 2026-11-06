@@ -63,6 +63,23 @@
             "type": "object",
             "description": "Estados HTTP, Content-Type, errores y consumo observados durante una sola navegación."
           },
+          "proxy": {
+            "type": "object",
+            "description": "Configuración y estado del proxy sin URL, contraseña, token ni identificador de sesión.",
+            "properties": {
+              "enabled": {"type": "boolean"},
+              "provider": {"type": ["string", "null"], "enum": ["apify", null]},
+              "groups": {"type": "array", "items": {"type": "string"}},
+              "country": {"type": ["string", "null"]},
+              "sessionMode": {"type": ["string", "null"], "enum": ["single-run", null]},
+              "status": {"type": "string", "enum": ["disabled", "pending", "initializing", "configured", "error", "not-used-offline"]},
+              "connected": {"type": ["boolean", "null"], "description": "True: respuesta HTTP del documento observada por el navegador, excepto 407. No verifica IP ni éxito comercial. Null: no observado."},
+              "documentHttpStatus": {"type": ["integer", "null"]},
+              "documentRequestSucceeded": {"type": ["boolean", "null"], "description": "Documento HTTP 200 sin desafío detectado. No equivale a extracción completa."}
+            },
+            "required": ["enabled", "provider", "groups", "country", "sessionMode", "status"],
+            "additionalProperties": false
+          },
           "error": {
             "type": [
               "object",

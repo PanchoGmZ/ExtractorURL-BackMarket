@@ -66,6 +66,16 @@ def advice(code):
         'TLS_ERROR': (
             'Revisa fecha del equipo y certificados de la conexión empresarial. No desactives la validación TLS.',
         ),
+        'PROXY_CONFIGURATION_ERROR': (
+            'Revisa en Apify Console → Proxy los grupos habilitados y sus permisos/coste. No se abrió Back Market.',
+            'Comprueba la autenticación del entorno y el plazo de configuración; no compartas contraseñas ni URLs de proxy.',
+        ),
+        'PROXY_AUTH_ERROR': (
+            'El proxy rechazó la autenticación. Revisa acceso al grupo y credenciales del entorno; no se reintenta ni se cambia de proxy.',
+        ),
+        'PROXY_CONNECTION_ERROR': (
+            'No se estableció el túnel del proxy. Revisa disponibilidad y permisos en Apify; conserva TLS y no repitas con otras IPs.',
+        ),
         'BROWSER_CLOSE_ERROR': (
             'Revisa si quedó abierta la ventana creada por esta ejecución y ciérrala antes de otra prueba.',
         ),

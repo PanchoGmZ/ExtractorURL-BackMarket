@@ -13,6 +13,7 @@ from crawl4ai.async_crawler_strategy import AsyncPlaywrightCrawlerStrategy
 from crawl4ai.browser_manager import BrowserManager
 from .diagnostics import event
 from .urls import is_challenge_url, redirect_details, safe_url, selection_state
+from .proxy import proxy_failure_code
 
 
 def classify_resource(path, *, is_document, commercial_kind, first_party):
@@ -52,7 +53,7 @@ class NativeBrowserManager(BrowserManager):
         return options
 
 
-def make_crawler():
+def make_crawler(*, proxy_enabled=False):
     config = BrowserConfig(headless=os.name != 'nt', browser_type='chromium',
         chrome_channel='chrome' if os.name == 'nt' else 'chromium', ignore_https_errors=False,
         enable_stealth=False, use_persistent_context=False, verbose=False)
@@ -60,9 +61,14 @@ def make_crawler():
     config.user_agent = None
     config.browser_hint = None
     config.headers = {}
-    strategy = AsyncPlaywrightCrawlerStrategy(browser_config=config)
+    logger = None
+    if proxy_enabled:
+        from .proxy import private_proxy_logger
+        logger = private_proxy_logger()
+    strategy = AsyncPlaywrightCrawlerStrategy(browser_config=config, logger=logger)
     strategy.browser_manager = NativeBrowserManager(config, logger=strategy.logger)
-    return AsyncWebCrawler(crawler_strategy=strategy, config=config, verbose=False, base_directory=str(ROOT / '.cache'))
+    return AsyncWebCrawler(crawler_strategy=strategy, config=config, logger=logger,
+                           verbose=False, base_directory=str(ROOT / '.cache'))
 
 
 def memory_mb():
@@ -78,7 +84,7 @@ def memory_mb():
     return round(private / 1048576, 1), round(rss / 1048576, 1)
 
 
-async def acquire(data):
+async def acquire(data, *, proxy_config=None):
     started = time.perf_counter()
     report = {'status': 'running', 'url': safe_url(data['url']), 'navigationCount': 0,
         'directApiRequests': 0, 'requests': [], 'peakPrivateMb': 0, 'peakRssMb': 0,
@@ -87,7 +93,7 @@ async def acquire(data):
     responses, tasks = {}, set()
     denied_optional = set()
     stop = asyncio.Event()
-    crawler = make_crawler()
+    crawler = make_crawler(proxy_enabled=True) if proxy_config is not None else make_crawler()
     origin = urlsplit(data['url']).hostname
     endpoint = '/product-page/products/' + data['productId']
     paths = {endpoint: 'product', endpoint + '/pickers': 'pickers',
@@ -243,7 +249,9 @@ async def acquire(data):
                 event('HTTP', '%s | estado=%s | Content-Type=%s | ruta=%s | CF-Ray=%s',
                       record['kind'], response.status, record['contentType'] or '(ausente)',
                       path, record['requestIds'].get('cf-ray', '(ausente)'))
-                if response.status >= 400 and not reason:
+                if is_document and proxy_config is not None and response.status == 407:
+                    fail('error', 'PROXY_AUTH_ERROR', 'El proxy rechazó la autenticación; no se reintenta.')
+                if response.status >= 400 and not reason and not (is_document and proxy_config is not None and response.status == 407):
                     report['resourceErrors'].append(record.copy())
                     event('RECURSO_OPCIONAL' if category == 'optional' else 'RECURSO_SECUNDARIO',
                           'HTTP %s | categoría=%s | se conserva el documento comercial permitido.',
@@ -313,11 +321,17 @@ async def acquire(data):
         result = await crawler.arun(data['url'], config=CrawlerRunConfig(
             cache_mode=CacheMode.DISABLED, wait_until='domcontentloaded', page_timeout=data['timeoutSeconds'] * 1000,
             delay_before_return_html=0.5, max_retries=0, magic=False, simulate_user=False,
-            override_navigator=False, verbose=False))
+            override_navigator=False, verbose=False, proxy_config=proxy_config))
         if tasks:
             await asyncio.gather(*list(tasks), return_exceptions=True)
         if not result.success or result.status_code != 200:
-            fail('partial', 'NAVIGATION_ERROR', f'HTML HTTP {result.status_code}; Crawl4AI success={result.success}')
+            transport_error = proxy_failure_code(getattr(result, 'error_message', None), result.status_code) if proxy_config is not None else None
+            if result.status_code == 403:
+                fail('blocked', 'HTTP_403', 'Documento principal denegado; no se reintenta.')
+            elif transport_error:
+                fail('error', transport_error, 'Fallo de transporte proxy; detalle privado omitido y sin reintentos.')
+            else:
+                fail('partial', 'NAVIGATION_ERROR', f'HTML HTTP {result.status_code}; Crawl4AI success={result.success}')
             return ''
         if len(result.html.encode()) > data['maxHtmlBytes']:
             event('TOPE_TAMANO', '100%% superado en HTML renderizado | límite=%s bytes', data['maxHtmlBytes'], level='warning')
@@ -349,6 +363,10 @@ async def acquire(data):
         code = 'BROWSER_UNAVAILABLE' if "Executable doesn't exist" in str(error) else type(error).__name__
         if 'ERR_CERT' in str(error):
             code = 'TLS_ERROR'
+        if proxy_config is not None:
+            # Playwright errors may serialize proxy settings outside a URL.
+            message = 'Fallo de navegador con proxy; detalle privado omitido. Tipo=' + type(error).__name__
+            code = proxy_failure_code(error) or code
         fail('error', code, message)
     finally:
         report['stage'] = 'browser-close'
